@@ -3,6 +3,7 @@ import os
 import shutil
 from pathlib import Path
 import zarr
+from zarr.storage import ZipStore
 
 
 def zip_raw_data_zarr(raw_fname, delete_original=True, verbose=1):
@@ -23,14 +24,13 @@ def zip_raw_data_zarr(raw_fname, delete_original=True, verbose=1):
 
     return out_fname_zip
 
-
 def zarr_reader_folder_or_zipstore(fname: str, depth: int = 0):
     """Enforces readonly access"""
     try:
         if Path(fname).is_dir():
             dat = zarr.open(fname, mode='r')
         elif fname.endswith('.zarr.zip'):
-            store = zarr.ZipStore(fname, mode='r')
+            store = ZipStore(fname, mode='r')
             dat = zarr.open(store)
         else:
             raise NotImplementedError(f"Not a zarr directory or zip store: {fname}")
@@ -39,8 +39,10 @@ def zarr_reader_folder_or_zipstore(fname: str, depth: int = 0):
             raise e
         # On Windows, if the path contains a special character, zarr.open() will fail. Retry with raw string
         dat = zarr_reader_folder_or_zipstore(rf"{fname}", depth=depth + 1)
-    except zarr.errors.PathNotFoundError as e:
-        logging.error(f"Corrupted zarr file found at {fname}; most likely the file or folder needs to be deleted")
+    except zarr.errors.NodeNotFoundError as e:
+        logging.error(
+            f"Corrupted zarr file found at {fname}; most likely the file or folder needs to be deleted"
+        )
         raise e
 
     return dat

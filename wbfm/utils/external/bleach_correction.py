@@ -109,6 +109,10 @@ def detrend_exponential_lmfit(y_with_nan, x=None, ind_subset=None, restore_mean_
         flag = False
 
     if restore_mean_value:
+        # Ensure the array is writable (it may be read-only if it came from a
+        # memory-mapped file or a fallback path that reuses the input array).
+        if not y_corrected_with_nan.flags.writeable:
+            y_corrected_with_nan = np.array(y_corrected_with_nan, dtype=float)
         y_corrected_with_nan *= original_mean / np.nanmean(y_corrected_with_nan)
 
     return y_corrected_with_nan, (y_fit, out, flag)

@@ -1924,7 +1924,8 @@ class NapariTraceExplorer(QtWidgets.QWidget):
         # Doesn't work if the time line needs to be initialized
         time_options = self.calculate_time_line_options()
         try:
-            self.time_line.set_xdata(time_options['x'])
+            x = time_options['x']
+            self.time_line.set_xdata([x, x])
             # self.time_line.set_data(time_options[:2])
             self.time_line.set_color(time_options['color'])
         except AttributeError as e:
@@ -2200,7 +2201,7 @@ def napari_trace_explorer_from_config(project_path: str, app=None,
                                                        to_load_tracklets=load_tracklets,
                                                        to_load_interactivity=load_tracklets,
                                                        to_load_segmentation_metadata=True,
-                                                       to_load_frames=load_tracklets,  # This is used for ground truth comparison, which requires tracklets
+                                                       to_load_frames=False,  # Set to False to drastically speed up GUI loading
                                                        initialization_kwargs=initialization_kwargs, allow_hybrid_loading=True)
     if DEBUG:
         logging.debug(project_data)
@@ -2312,7 +2313,8 @@ def napari_behavior_explorer_from_config(project_path, fluorescence_fps=True, DE
     @viewer.dims.events.current_step.connect
     def update_time_line(event):
         time_options = get_time_line_options()
-        time_line.set_xdata(time_options['x'])
+        x = time_options['x']
+        time_line.set_xdata([x, x])
         time_line.set_color(time_options['color'])
         mpl_widget.draw()
 

@@ -424,7 +424,7 @@ class ProjectData:
             tracking_cfg=tracking_cfg,
             training_cfg=training_cfg,
             z_to_xy_ratio=self.physical_unit_conversion.z_to_xy_ratio,
-            buffer_masks=zarr.zeros_like(self.raw_segmentation),
+            buffer_masks=zarr.empty(self.raw_segmentation.shape, dtype=self.raw_segmentation.dtype, zarr_format=2),
             to_setup_interactivity=self.set_up_tracklet_interactivity,
             logger=self.logger,
             verbose=self.verbose,
@@ -646,12 +646,19 @@ class ProjectData:
                     ex.submit(obj.load_frame_related_properties)
                 if to_load_segmentation_metadata:
                     ex.submit(obj.load_segmentation_related_properties)
-                red_data = ex.submit(read_if_exists, red_dat_fname, zarr_reader_folder_or_zipstore).result()
-                green_data = ex.submit(read_if_exists, green_dat_fname, zarr_reader_folder_or_zipstore).result()
-                red_traces = ex.submit(read_if_exists, red_traces_fname).result()
-                green_traces = ex.submit(read_if_exists, green_traces_fname).result()
-                raw_segmentation = ex.submit(read_if_exists, seg_fname_raw, zarr_reader_readwrite).result()
-                segmentation = ex.submit(read_if_exists, seg_fname, zarr_reader_folder_or_zipstore).result()
+                future_red_data = ex.submit(read_if_exists, red_dat_fname, zarr_reader_folder_or_zipstore)
+                future_green_data = ex.submit(read_if_exists, green_dat_fname, zarr_reader_folder_or_zipstore)
+                future_red_traces = ex.submit(read_if_exists, red_traces_fname)
+                future_green_traces = ex.submit(read_if_exists, green_traces_fname)
+                future_raw_segmentation = ex.submit(read_if_exists, seg_fname_raw, zarr_reader_readwrite)
+                future_segmentation = ex.submit(read_if_exists, seg_fname, zarr_reader_folder_or_zipstore)
+                
+                red_data = future_red_data.result()
+                green_data = future_green_data.result()
+                red_traces = future_red_traces.result()
+                green_traces = future_green_traces.result()
+                raw_segmentation = future_raw_segmentation.result()
+                segmentation = future_segmentation.result()
 
             if red_traces is not None:
                 red_traces.replace(0, np.nan, inplace=True)

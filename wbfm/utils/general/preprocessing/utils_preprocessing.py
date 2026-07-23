@@ -48,7 +48,7 @@ def background_subtract_single_channel(raw_fname, background_fname, num_frames, 
     fname_subtracted = add_name_suffix(raw_fname, '_background_subtracted')
     logging.info(f"Creating data copy at {fname_subtracted}")
     store = zarr.DirectoryStore(fname_subtracted)
-    background_subtracted = zarr.zeros_like(raw_data, store=store)
+    background_subtracted = zarr.empty(raw_data.shape, dtype=raw_data.dtype, store=store, compressor=None, zarr_format=2)
     # Loop so that not all is loaded in memory... should I use dask?
     for i, volume in enumerate(tqdm(raw_data)):
         background_subtracted[i, ...] = np.array(np.maximum(volume - background_video_mean, 0), dtype=volume.dtype)

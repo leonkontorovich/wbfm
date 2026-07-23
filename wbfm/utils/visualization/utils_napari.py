@@ -1,5 +1,5 @@
 from ast import Index
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List
 
 import numpy as np
@@ -48,7 +48,7 @@ def napari_labels_from_traces_dataframe(df, neuron_name_dict=None, label_using_c
     -------
 
     """
-    df.replace(0, np.NaN, inplace=True)  # DLC uses all zeros as failed tracks
+    df.replace(0, np.nan, inplace=True)  # DLC uses all zeros as failed tracks
 
     if neuron_name_dict is None:
         neuron_name_dict = {}
@@ -123,7 +123,7 @@ def napari_labels_from_traces_dataframe(df, neuron_name_dict=None, label_using_c
     label_str = '{automatic_label}' if automatic_label_by_default else '{custom_label}'
     text = {'string': label_str}
     # Final package
-    options = {'data': all_t_zxy, 'face_color': 'transparent', 'edge_color': 'transparent',
+    options = {'data': all_t_zxy, 'face_color': 'transparent', 'border_color': 'transparent',
                'text': text,  # Can add color or size here
                'properties': properties, 'name': 'Neuron IDs', 'blending': 'additive',
                'visible': False}
@@ -140,7 +140,7 @@ class NapariPropertyHeatMapper:
 
     red_traces: pd.DataFrame
     green_traces: pd.DataFrame
-    curvature_fluorescence_fps: pd.DataFrame = pd.DataFrame([np.nan])
+    curvature_fluorescence_fps: pd.DataFrame = field(default_factory=lambda: pd.DataFrame([np.nan]))
 
     names: List[str] = None
 
@@ -380,7 +380,7 @@ def napari_labels_from_frames(all_frames: dict, num_frames=1, to_flip_zxy=True) 
         properties['label'].extend(label_vec)
 
     all_t_zxy = all_t_zxy[1:, :]  # Remove dummy starter point
-    options = {'data': all_t_zxy, 'face_color': 'transparent', 'edge_color': 'transparent', 'text': 'label',
+    options = {'data': all_t_zxy, 'face_color': 'transparent', 'border_color': 'transparent', 'text': 'label',
                'properties': properties, 'name': 'Raw IDs'}
 
     return options

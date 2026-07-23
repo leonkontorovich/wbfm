@@ -9,10 +9,13 @@ channels:
   - conda-forge
   - nodefaults
 dependencies:
-  - python=3.8
+  - python=3.11
   - pip
+  - pandas
+  - pytables
+  - openpyxl
+  - pyqt
   - pip:
-    - tables
     - opencv-python-headless
     - statsmodels
     - ppca
@@ -33,5 +36,4 @@ dependencies:
     - matplotlib
     - scikit-learn
     - napari[all]
-    - openpyxl
     - plotly

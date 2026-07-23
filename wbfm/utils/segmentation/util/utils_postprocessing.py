@@ -1115,7 +1115,7 @@ def zero_out_borders_using_config(project_config: ModularProjectConfig):
     do_full_erosion = segment_cfg.config['segmentation_params'].get('full_erosion', False)
 
     new_seg_fname = get_sequential_filename(old_seg_fname)
-    new_masks = zarr.zeros_like(old_masks, store=new_seg_fname)
+    new_masks = zarr.empty(old_masks.shape, dtype=old_masks.dtype, store=new_seg_fname, compressor=None, zarr_format=2)
     # new_masks = zarr.open(new_seg_fname, mode='a',
     #                       shape=old_masks.shape, chunks=old_masks.chunks, dtype=np.uint16,
     #                       fill_value=0,

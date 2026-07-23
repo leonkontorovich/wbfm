@@ -497,7 +497,7 @@ class NeuronNameEditor(QWidget):
                 self.update_dataframe_cell_from_table(col, row)
 
     def update_dataframe_cell_from_table(self, col, row, emit_signal=True):
-        dtype = self.df_datatypes[col]
+        dtype = self.df_datatypes.iloc[col]
         string_data = self.model.item(row, col).text()
         # Also emit a signal if this is the "ID1" column
         # print(f"Updating dataframe cell: {row}, {col} to {string_data}")
