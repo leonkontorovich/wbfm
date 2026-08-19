@@ -152,24 +152,33 @@ class CreateProjectDialog(QDialog):
         self.projectLocationLabel.setText(self.project_foldername)
 
     def create_project(self):
-        full_command = None
-        command = "scripts/0a-create_new_project.py"
-        experimenter = self.experimenterTextEdit.toPlainText()
-        task = self.taskTextEdit.toPlainText()
+        import sys
+        from pathlib import Path
+        script_path = Path(__file__).resolve().parent.parent / "scripts" / "0a-create_new_project.py"
+        experimenter = self.experimenterTextEdit.toPlainText().strip()
+        task = self.taskTextEdit.toPlainText().strip()
+
+        cmd_args = [sys.executable, "-X", "utf8", str(script_path), "with"]
+        valid = False
 
         if self.project_foldername is not None:
+            cmd_args.append(f"project_dir={self.project_foldername}")
             if self.red_filename is not None and self.green_filename is not None:
-                full_command = f"python {command} with project_dir={self.project_foldername} " \
-                               f"red_bigtiff_fname={self.red_filename} green_bigtiff_fname={self.green_filename} " \
-                               f"experimenter={experimenter} task_name={task}"
+                cmd_args.append(f"red_bigtiff_fname={self.red_filename}")
+                cmd_args.append(f"green_bigtiff_fname={self.green_filename}")
+                valid = True
             elif self.data_foldername is not None:
-                full_command = f"python {command} with project_dir={self.project_foldername} " \
-                               f"parent_data_folder={self.data_foldername} " \
-                               f"experimenter={experimenter} task_name={task}"
+                cmd_args.append(f"parent_data_folder={self.data_foldername}")
+                valid = True
 
-        if full_command is not None:
-            print(f"Running command: {full_command}")
-            subprocess.run(full_command, shell=True)
+            if experimenter:
+                cmd_args.append(f"experimenter={experimenter}")
+            if task:
+                cmd_args.append(f"task_name={task}")
+
+        if valid:
+            print(f"Running command: {' '.join(cmd_args)}")
+            subprocess.run(cmd_args)
             self.finishButton.setText("Create new project; Close the window if finished")
         else:
             print("Fill out required fields first!")

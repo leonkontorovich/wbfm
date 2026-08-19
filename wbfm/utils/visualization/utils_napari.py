@@ -241,7 +241,12 @@ class NapariPropertyHeatMapper:
         val_to_plot = list((self.mean_green / self.mean_red).std())
         return property_vector_to_colormap(val_to_plot, self.vec_of_labels, scale_to_minus_1_and_1=False)
 
-    def custom_val_to_plot(self, val_to_plot: pd.Series, scale_to_minus_1_and_1):
+    def custom_val_to_plot(self, val_to_plot, scale_to_minus_1_and_1):
+        if hasattr(val_to_plot, 'reindex') and self.names is not None:
+            # If it's a pandas Series, we MUST reindex to match self.names order 
+            # otherwise zip(vec_of_labels, val_to_plot) randomly mismatches neurons!
+            val_to_plot = val_to_plot.reindex(self.names)
+            
         prop_dict = property_vector_to_colormap(val_to_plot, self.vec_of_labels,
                                                 scale_to_minus_1_and_1=scale_to_minus_1_and_1)
         return prop_dict
@@ -271,8 +276,10 @@ def property_vector_to_colormap(val_to_plot, vec_of_labels, cmap=plt.cm.RdBu,
     prop = np.array(val_to_plot)
     # Check if the values are already in the range [-1, 1]
     if scale_to_minus_1_and_1:
-        if np.nanmax(prop) > 1 or np.nanmin(prop) < -1:
-            raise ValueError("Values should be in the range [-1, 1] for this colormap")
+        if np.nanmax(prop) > 1.01 or np.nanmin(prop) < -1.01:
+            raise ValueError(f"Values should be in the range [-1, 1] for this colormap. Got {np.nanmin(prop)} to {np.nanmax(prop)}")
+        # Clip to handle floating point precision errors slightly outside [-1, 1]
+        prop = np.clip(prop, -1, 1)
         # matplotlib cmaps need values in [0, 1]
         prop_scaled = (prop + 1) / 2
         # Use TwoSlopeNorm to ensure white is at 0; only used for colorbar
@@ -288,7 +295,14 @@ def property_vector_to_colormap(val_to_plot, vec_of_labels, cmap=plt.cm.RdBu,
         prop_scaled = scaler(prop)
 
     colors = cmap(prop_scaled)
-    prop_dict = dict(zip(vec_of_labels, colors))
+    # Handle NaN in property by setting a faint gray transparent color
+    if np.any(np.isnan(prop)):
+        nan_mask = np.isnan(prop)
+        colors[nan_mask] = np.array([0.5, 0.5, 0.5, 0.2])
+
+    prop_dict = {int(k): v for k, v in zip(vec_of_labels, colors) if not (isinstance(k, float) and np.isnan(k))}
+    prop_dict[0] = np.array([0.0, 0.0, 0.0, 0.0])
+    prop_dict[None] = np.array([0.0, 0.0, 0.0, 0.0])
 
     if create_colorbar:
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=scaler)

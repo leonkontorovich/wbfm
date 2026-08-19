@@ -322,8 +322,20 @@ class NapariLayerInitializer:
                 # Also normalize based on the total intensity across colors per object, to make the colormap work
                 df_prop = df_prop.divide(df_prop.sum(axis=0), axis=1)
                 prop_dict = {k: np.array(tuple(v) + (1.0, )) for k, v in df_prop.to_dict(orient='list').items()}
-                _layer.color = prop_dict
-                _layer.color_mode = 'direct'
+                if 0 not in prop_dict:
+                    prop_dict[0] = np.array([0.0, 0.0, 0.0, 0.0])
+                if None not in prop_dict:
+                    prop_dict[None] = np.array([0.0, 0.0, 0.0, 0.0])
+                try:
+                    from napari.utils.colormaps import DirectLabelColormap
+                    _layer.colormap = DirectLabelColormap(color_dict=prop_dict)
+                except Exception:
+                    pass
+                try:
+                    _layer.color = prop_dict
+                    _layer.color_mode = 'direct'
+                except Exception:
+                    pass
                 layers_actually_added.append('Neuropal segmentation')
 
         if 'Neuropal Ids' in which_layers and project_data.neuropal_manager.segmentation is not None:
@@ -361,13 +373,17 @@ class NapariLayerInitializer:
                 continue
             test_neuron = project_data.neuron_names[0]
             num_frames = project_data.red_traces[test_neuron].shape[0]
-            if project_data.worm_posture_class.has_full_kymograph:
+            method_name = layer_tuple[1] if len(layer_tuple) > 1 else 'custom_val_to_plot'
+            
+            # Only load curvature if specifically needed for kymograph correlation
+            curvature = None
+            if method_name == 'corrcoef_kymo':
                 try:
-                    curvature = project_data.worm_posture_class.curvature(fluorescence_fps=True).iloc[0:num_frames]
-                except NoBehaviorAnnotationsError:
+                    if project_data.worm_posture_class.has_full_kymograph:
+                        curvature = project_data.worm_posture_class.curvature(fluorescence_fps=True).iloc[0:num_frames]
+                except Exception:
                     curvature = None
-            else:
-                curvature = None
+
             heat_mapper = NapariPropertyHeatMapper(project_data.red_traces, project_data.green_traces,
                                                    curvature_fluorescence_fps=curvature,
                                                    names=project_data.neuron_names)
@@ -376,7 +392,6 @@ class NapariLayerInitializer:
                 logging.warning(f"Skipping tuple: {layer_tuple}")
                 continue
             else:
-                method_name = layer_tuple[1]
                 layers_actually_added.append(layer_tuple)
                 if len(layer_tuple) > 2:
                     layer_name = layer_tuple[2]
@@ -386,18 +401,39 @@ class NapariLayerInitializer:
             if heatmap_kwargs.get('t', None) is not None:
                 seg = project_data.segmentation[heatmap_kwargs['t']]
                 del heatmap_kwargs['t']
+                layer_scale = (z_to_xy_ratio, 1.0, 1.0)
             else:
                 seg = project_data.segmentation
+                layer_scale = (1.0, z_to_xy_ratio, 1.0, 1.0) if getattr(seg, 'ndim', 0) == 4 else (z_to_xy_ratio, 1.0, 1.0)
 
             prop_dict = getattr(heat_mapper, method_name)(**heatmap_kwargs)
+            if 0 not in prop_dict:
+                prop_dict[0] = np.array([0.0, 0.0, 0.0, 0.0])
+            if None not in prop_dict:
+                prop_dict[None] = np.array([0.0, 0.0, 0.0, 0.0])
+
             # Note: this layer must be visible for the prop_dict to work correctly
-            _layer_opt = dict(name=layer_name, scale=(z_to_xy_ratio, 1.0, 1.0),
-                              opacity=0.4, visible=True, rendering='translucent')
+            _layer_opt = dict(name=layer_name, scale=layer_scale,
+                              opacity=0.8, visible=True, rendering='translucent')
             _layer_opt.update(layer_opt)
+            try:
+                from napari.utils.colormaps import DirectLabelColormap
+                _layer_opt['colormap'] = DirectLabelColormap(color_dict=prop_dict)
+            except Exception:
+                pass
+
             _layer = viewer.add_labels(seg, **_layer_opt)
             _layer.blending = 'translucent_no_depth'
-            _layer.color = prop_dict
-            _layer.color_mode = 'direct'
+            try:
+                from napari.utils.colormaps import DirectLabelColormap
+                _layer.colormap = DirectLabelColormap(color_dict=prop_dict)
+            except Exception:
+                pass
+            try:
+                _layer.color = prop_dict
+                _layer.color_mode = 'direct'
+            except Exception:
+                pass
 
         project_data.logger.debug(f"Finished adding layers {which_layers}")
         missed_layers = list(set(which_layers) - set(layers_actually_added))

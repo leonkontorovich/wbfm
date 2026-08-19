@@ -1,0 +1,3 @@
+# Ensure shell and snakemake workflow scripts always retain LF line endings on Windows
+*.sh text eol=lf
+*.smk text eol=lf

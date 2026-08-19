@@ -70,25 +70,25 @@ class NapariTraceExplorer(QtWidgets.QWidget):
             project_data.check_data_desyncing(raise_error=True)
 
         super(QtWidgets.QWidget, self).__init__()
-        self.verticalLayoutWidget = QtWidgets.QWidget(self)
+        
+        # Set up a main layout for the dock widget
+        main_layout = QtWidgets.QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Create a scroll area
+        self.scroll = QtWidgets.QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        
+        # Create the inner widget and its layout to hold all UI elements
+        self.verticalLayoutWidget = QtWidgets.QWidget()
         self.verticalLayout = QtWidgets.QVBoxLayout(self.verticalLayoutWidget)
+        
+        # Set the inner widget as the scroll area's content
+        self.scroll.setWidget(self.verticalLayoutWidget)
+        main_layout.addWidget(self.scroll)
+
         self.dat = project_data
         self.main_window = app
-
-        # https://stackoverflow.com/questions/12781407/how-do-i-resize-the-contents-of-a-qscrollarea-as-more-widgets-are-placed-inside
-        # scroll = QtWidgets.QScrollArea()
-        # scroll.setWidgetResizable(True)  # CRITICAL
-        #
-        # inner = QtWidgets.QFrame()
-        # inner_layout = QtWidgets.QVBoxLayout()
-        # inner.setLayout(inner_layout)
-        # scroll.setWidget(inner)  # CRITICAL
-        #
-        # inner_layout.addWidget(scroll)
-        #
-        # self.verticalLayoutWidget = inner
-        # self.verticalLayout = inner_layout
-        # self.scroll = scroll
 
         # Helper fields for subplots
         self.tracklet_lines = {}
@@ -2133,28 +2133,42 @@ class NapariTraceExplorer(QtWidgets.QWidget):
         return all_tracks_array, track_of_point
 
     def _add_correlation_heatmap_layer(self, y, layer_name):
-        """Shared helper: color neurons by correlation to a given timeseries y."""
+        """Shared helper: color neurons by correlation to a given timeseries y across the full 4D video."""
         df = self.df_of_current_traces
         val_to_plot = df.corrwith(y)
         # Square but keep the sign; de-emphasizes very small correlations
         val_to_plot = val_to_plot * np.abs(val_to_plot)
         which_layers = [('heatmap', 'custom_val_to_plot', layer_name)]
-        heatmap_kwargs = dict(val_to_plot=val_to_plot, t=self.t, scale_to_minus_1_and_1=True)
+        heatmap_kwargs = dict(val_to_plot=val_to_plot, scale_to_minus_1_and_1=True)
         self.logger.debug(f'Calculated correlation values: {val_to_plot}')
+
+        # Remove existing layer with the same name if present
+        if layer_name in self.viewer.layers:
+            self.viewer.layers.remove(layer_name)
+
+        # Lower visibility/opacity of standard segmentation layers so the correlation colors stand out cleanly
+        if 'Colored segmentation' in self.viewer.layers:
+            self.viewer.layers['Colored segmentation'].visible = False
+        if 'Raw segmentation' in self.viewer.layers:
+            self.viewer.layers['Raw segmentation'].visible = False
+
         self.dat.add_layers_to_viewer(self.viewer, which_layers=which_layers, heatmap_kwargs=heatmap_kwargs,
-                                      layer_opt=dict(opacity=1.0))
+                                      layer_opt=dict(opacity=0.85))
         # Move manual_ids to top, so they are not obscured
-        i_manual_id_layer = self.viewer.layers.index(self.get_manual_id_layer())
-        # Reorder function needs the layer index, not the name
-        self.viewer.layers.move(i_manual_id_layer, -1)
+        try:
+            manual_layer = self.get_manual_id_layer()
+            if manual_layer in self.viewer.layers:
+                i_manual_id_layer = self.viewer.layers.index(manual_layer)
+                self.viewer.layers.move(i_manual_id_layer, -1)
+        except Exception:
+            pass
 
     def add_layer_colored_by_correlation_to_current_neuron(self):
         """
-        Get the correlation between the current neuron and the rest...
-        for now the dataframe needs to be recalculated
+        Get the correlation between the current neuron and all other neurons across the entire video.
         """
         y = self.y_trace_mode
-        layer_name = f'correlation_to_{self.current_neuron_name}_at_t_{self.t}'
+        layer_name = f'correlation_to_{self.current_neuron_name}'
         self._add_correlation_heatmap_layer(y, layer_name)
 
     def add_layer_colored_by_correlation_to_reference_trace(self):
@@ -2175,7 +2189,7 @@ class NapariTraceExplorer(QtWidgets.QWidget):
                               len(y), len(self.df_of_current_traces))
             return
 
-        layer_name = f'correlation_to_ref_{ref_trace_name}_at_t_{self.t}'
+        layer_name = f'correlation_to_ref_{ref_trace_name}'
         self._add_correlation_heatmap_layer(y, layer_name)
 
 
@@ -2277,9 +2291,16 @@ def napari_behavior_explorer_from_config(project_path, fluorescence_fps=True, DE
         video_zarr = video_zarr[::project_data.physical_unit_conversion.frames_per_volume, :, :]
     video = video_zarr
 
-    # dask_chunk = list(video_zarr.chunks).copy()
-    # dask_chunk[0] = 1000
-    # video = dask.array.from_zarr(video_zarr, chunks=dask_chunk)
+    try:
+        import dask.array as da
+        # Check if video_zarr has a chunks attribute (zarr arrays do)
+        if hasattr(video_zarr, 'chunks'):
+            dask_chunk = list(video_zarr.chunks).copy()
+            dask_chunk[0] = 1000
+            video = da.from_zarr(video_zarr, chunks=dask_chunk)
+            print("Successfully loaded video with Dask chunking for lazy loading.")
+    except ImportError:
+        print("Dask not installed; falling back to strict zarr loading.")
 
     # Main viewer
     viewer = napari.view_image(video)

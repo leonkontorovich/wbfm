@@ -2,7 +2,7 @@ from wbfm.utils.projects.finished_project_data import ProjectData
 
 
 class DummyProjectConfig:
-    has_valid_self_path = True
+    has_valid_self_path = False
 
     def __init__(self):
         self.logger = type('Logger', (), {'debug': lambda *args, **kwargs: None, 'warning': lambda *args, **kwargs: None})()
