@@ -8,7 +8,7 @@ setup(name='wbfm',
       author='Charles Fieseler',
       author_email='charles.fieseler@gmail.com',
       license='MIT',
-      packages=setuptools.find_namespace_packages(),
+      packages=setuptools.find_namespace_packages(exclude=["build*", "venv*", "conda-environments*", "docs*", "docker*"]),
       zip_safe=False,
     include_package_data=True,
       package_data={
