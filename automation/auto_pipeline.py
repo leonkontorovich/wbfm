@@ -4,22 +4,23 @@ WBFM End-to-End Automated Pipeline Runner ('Go' Engine)
 ======================================================
 
 Complete, error-free automation for whole-brain imaging:
-  1. Raw data sanitization & validation (no dots, standard _Ch0/_Ch1, NDTiff validation, config.yaml).
-  2. Project structure initialization via WBFM 0a-create_new_project.py.
-  3. Dual-tracking configuration (SuperGlue + Barlow Twins ResNet-50).
-  4. Resilient Slurm master job dispatching on LISC cluster.
-  5. Dual tracking execution:
+  1. Multi-worm batch & single-worm auto-detection.
+  2. Raw data sanitization & validation (no dots, standard _Ch0/_Ch1, NDTiff validation, config.yaml).
+  3. Project structure initialization via WBFM 0a-create_new_project.py.
+  4. Dual-tracking configuration (SuperGlue + Barlow Twins ResNet-50).
+  5. Resilient Slurm master job dispatching on LISC cluster.
+  6. Dual tracking execution:
        - StarDist 3D Segmentation + SuperGlue Tracking + Calcium Traces (`traces`)
        - Barlow Embedding (GPU) + Barlow Tracking (`barlow_tracking`)
        - Automated Barlow ID Transfer (`id-transfer-existing-barlow`)
-  6. Automated delivery of manual_annotation.xlsx ready for Napari GUI review.
-  7. Status monitoring and deliverable verification.
+  7. Automated delivery of manual_annotation.xlsx ready for Napari GUI review.
+  8. Status monitoring and deliverable verification.
 
 Usage:
-  python auto_pipeline.py go [optional_raw_folder]
-  python auto_pipeline.py sanitize <raw_folder>
-  python auto_pipeline.py status <project_folder>
-  python auto_pipeline.py verify <project_folder>
+  go                                (Auto-detects latest recording)
+  go <raw_folder_or_parent>         (Single worm or batch folder)
+  go status <project_folder>        (Check live Slurm status)
+  go verify <project_folder>        (Verify all deliverables)
 """
 
 import os
@@ -96,26 +97,57 @@ def run_ssh_cmd(cmd: str, check: bool = True) -> subprocess.CompletedProcess:
     return res
 
 
+def is_direct_worm_folder(folder: Path) -> bool:
+    """Check if folder directly contains channel stores or BigTIFFs."""
+    if not folder.is_dir():
+        return False
+    subdirs = [d.name.lower() for d in folder.iterdir() if d.is_dir()]
+    if any(s.endswith("_ch0") or "ch0" in s for s in subdirs):
+        return True
+    files = [f.name.lower() for f in folder.iterdir() if f.is_file()]
+    if any(f.endswith("_ch0.btf") or f.endswith("_ch0.tif") for f in files):
+        return True
+    return False
+
+
+def discover_worm_folders(target_dir: Path) -> List[Path]:
+    """Discover all worm recording folders under target_dir (handles single or batch)."""
+    if is_direct_worm_folder(target_dir):
+        return [target_dir]
+
+    found = []
+    for sub in target_dir.iterdir():
+        if sub.is_dir() and is_direct_worm_folder(sub):
+            # Skip alignment, background, notes
+            lower = sub.name.lower()
+            if any(skip in lower for skip in ["align", "backgr", "note", "calib"]):
+                logger.info(f"Skipping non-worm reference folder: {sub.name}")
+                continue
+            found.append(sub)
+
+    if not found:
+        # Recursive fallback (depth 2)
+        for sub in target_dir.glob("*/*"):
+            if sub.is_dir() and is_direct_worm_folder(sub):
+                lower = sub.name.lower()
+                if not any(skip in lower for skip in ["align", "backgr", "note", "calib"]):
+                    found.append(sub)
+
+    return sorted(found, key=lambda p: p.stat().st_mtime)
+
+
 def find_latest_raw_folder() -> Path:
-    """Find the newest unanalyzed raw folder in Z:\\neurobiology\\zimmer\\LeonK\\raw."""
+    """Find newest unanalyzed raw recording or batch folder."""
     raw_root = SCRATCH_WIN_ROOT / "LeonK" / "raw"
     if not raw_root.exists():
         raise FileNotFoundError(f"Raw root not found: {raw_root}")
 
-    # Look for candidate folders containing _Ch0
-    candidates = []
-    for root, dirs, files in os.walk(raw_root):
-        if any(d.endswith("_Ch0") or "ch0" in d.lower() for d in dirs):
-            candidates.append(Path(root))
-        elif any(f.endswith("_Ch0.btf") or f.endswith("_Ch0.tif") for f in files):
-            candidates.append(Path(root))
-
-    if not candidates:
+    worms = discover_worm_folders(raw_root)
+    if not worms:
         raise FileNotFoundError(f"No valid raw acquisition folders found in {raw_root}")
 
-    # Return latest modified
-    latest = max(candidates, key=lambda p: p.stat().st_mtime)
-    logger.info(f"Auto-detected latest raw folder: {latest}")
+    latest = worms[-1]
+    logger.info(f"Auto-detected newest recording: {latest}")
     return latest
 
 
@@ -124,7 +156,7 @@ def sanitize_raw_folder(raw_dir: Path) -> Path:
     if not raw_dir.exists():
         raise FileNotFoundError(f"Raw directory not found: {raw_dir}")
 
-    # Remove illegal dots in directory name
+    # 1. Remove illegal dots in directory name
     name = raw_dir.name
     if "." in name:
         new_name = name.replace(".", "_")
@@ -132,7 +164,7 @@ def sanitize_raw_folder(raw_dir: Path) -> Path:
         logger.warning(f"Renaming directory with dots: {name} -> {new_name}")
         raw_dir = raw_dir.rename(new_path)
 
-    # Detect channel directories
+    # 2. Detect and normalize channels
     ch0_folder, ch1_folder = None, None
     subdirs = [p for p in raw_dir.iterdir() if p.is_dir()]
 
@@ -162,7 +194,7 @@ def sanitize_raw_folder(raw_dir: Path) -> Path:
         logger.info(f"Normalizing Ch1 name: {ch1_folder.name} -> {target.name}")
         ch1_folder = ch1_folder.rename(target)
 
-    # Verify channels exist
+    # 3. Verify channel data integrity
     if not (ch0_folder and ch1_folder):
         btf0 = list(raw_dir.glob("*_Ch0*.btf")) or list(raw_dir.glob("*_Ch0*.tif"))
         btf1 = list(raw_dir.glob("*_Ch1*.btf")) or list(raw_dir.glob("*_Ch1*.tif"))
@@ -176,14 +208,14 @@ def sanitize_raw_folder(raw_dir: Path) -> Path:
             raise ValueError(f"Missing .tif files in {ch0_folder.name} or {ch1_folder.name}")
         logger.info(f"Verified NDTiff stores: Ch0 ({len(tifs0)} tifs), Ch1 ({len(tifs1)} tifs)")
 
-    # Ensure config.yaml
+    # 4. Ensure acquisition config.yaml exists
     cfg_file = raw_dir / "config.yaml"
     if not cfg_file.exists():
         logger.warning(f"config.yaml missing; generating default template in {raw_dir.name}...")
         with open(cfg_file, "w") as f:
             f.write(DEFAULT_CONFIG_YAML_CONTENT)
     else:
-        logger.info("Found existing acquisition config.yaml [OK]")
+        logger.info(f"Found existing config.yaml in {raw_dir.name} [OK]")
 
     return raw_dir
 
@@ -251,7 +283,7 @@ def submit_dual_pipeline(project_dir: Path, project_linux: str) -> str:
     role: predict
     include: true
 """
-    # Write target YAML to project
+    (project_dir / "3-tracking").mkdir(parents=True, exist_ok=True)
     with open(project_dir / "3-tracking" / "id_transfer_target.yaml", "w") as f:
         f.write(test_yaml_content)
 
@@ -383,19 +415,32 @@ def verify_outputs(project_dir: Path) -> Dict[str, bool]:
     }
 
 
+def process_single_worm(worm_raw_dir: Path, output_parent: Optional[Path], experimenter: str) -> Dict[str, Any]:
+    """Process a single sanitized worm folder."""
+    clean_raw = sanitize_raw_folder(worm_raw_dir)
+    proj_dir, proj_linux = initialize_project(clean_raw, output_parent, experimenter)
+    job_id = submit_dual_pipeline(proj_dir, proj_linux)
+    return {
+        "raw": worm_raw_dir.name,
+        "project_dir": proj_dir,
+        "project_linux": proj_linux,
+        "job_id": job_id
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="WBFM Automated Dual-Pipeline Runner ('Go' Engine)")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # go
     p_go = subparsers.add_parser("go", help="Run complete dual-tracking pipeline")
-    p_go.add_argument("raw_folder", nargs="?", default=None, help="Raw data folder (or auto-detect latest)")
+    p_go.add_argument("raw_folder", nargs="?", default=None, help="Raw data folder or batch directory (or auto-detect latest)")
     p_go.add_argument("--output-parent", default=None, help="Target parent directory for projects")
     p_go.add_argument("--experimenter", default="LeonK", help="Experimenter name")
 
     # sanitize
     p_san = subparsers.add_parser("sanitize", help="Check and sanitize raw data folder")
-    p_san.add_argument("raw_folder", help="Raw data folder")
+    p_san.add_argument("raw_folder", help="Raw data folder or batch directory")
 
     # status
     p_stat = subparsers.add_parser("status", help="Check status of running pipeline")
@@ -408,25 +453,38 @@ def main():
     args = parser.parse_args()
 
     if args.command == "sanitize":
-        sanitize_raw_folder(Path(args.raw_folder))
+        raw_target = Path(args.raw_folder)
+        worms = discover_worm_folders(raw_target)
+        logger.info(f"Discovered {len(worms)} worm recording(s) to sanitize.")
+        for w in worms:
+            sanitize_raw_folder(w)
 
     elif args.command == "go":
         logger.info("================================================================")
         logger.info("             WBFM AUTOMATED PIPELINE: GO TRIGGERED              ")
         logger.info("================================================================")
-        raw_p = Path(args.raw_folder) if args.raw_folder else find_latest_raw_folder()
-        clean_raw = sanitize_raw_folder(raw_p)
+        raw_target = Path(args.raw_folder) if args.raw_folder else find_latest_raw_folder()
+        worms = discover_worm_folders(raw_target)
+        if not worms:
+            raise FileNotFoundError(f"No valid worm acquisitions found in {raw_target}")
 
         out_parent = Path(args.output_parent) if args.output_parent else None
-        proj_dir, proj_linux = initialize_project(clean_raw, out_parent, args.experimenter)
+        logger.info(f"Found {len(worms)} recording(s) to process.")
 
-        job_id = submit_dual_pipeline(proj_dir, proj_linux)
-        logger.info("================================================================")
-        logger.info(f"Master Slurm Job ID: {job_id}")
-        logger.info(f"Project Path (Win):  {proj_dir}")
-        logger.info(f"Project Path (LISC): {proj_linux}")
-        logger.info("Both SuperGlue tracking and Barlow embedding are now running.")
-        logger.info(f"Check status with:   python auto_pipeline.py status \"{proj_dir}\"")
+        dispatched = []
+        for w in worms:
+            logger.info(f"\n---> Processing: {w.name}")
+            info = process_single_worm(w, out_parent, args.experimenter)
+            dispatched.append(info)
+
+        logger.info("\n================================================================")
+        logger.info(f"Successfully Dispatched {len(dispatched)} Recording(s) to Slurm:")
+        for d in dispatched:
+            logger.info(f"  • {d['raw']:<25} -> Job {d['job_id']:<8} in {d['project_dir'].name}")
+        logger.info("\nBoth SuperGlue and Barlow tracking are running on LISC.")
+        logger.info("Check status anytime with:")
+        for d in dispatched:
+            logger.info(f"  go status \"{d['project_dir']}\"")
         logger.info("================================================================")
 
     elif args.command == "status":
