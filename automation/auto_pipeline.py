@@ -98,11 +98,12 @@ def run_ssh_cmd(cmd: str, check: bool = True) -> subprocess.CompletedProcess:
 
 
 def is_direct_worm_folder(folder: Path) -> bool:
-    """Check if folder directly contains channel stores or BigTIFFs."""
+    """Check if folder directly contains channel stores or BigTIFFs for a single worm."""
     if not folder.is_dir():
         return False
     subdirs = [d.name.lower() for d in folder.iterdir() if d.is_dir()]
-    if any(s.endswith("_ch0") or "ch0" in s for s in subdirs):
+    ch0_dirs = [s for s in subdirs if s.endswith("_ch0") or "ch0" in s]
+    if len(ch0_dirs) == 1:
         return True
     files = [f.name.lower() for f in folder.iterdir() if f.is_file()]
     if any(f.endswith("_ch0.btf") or f.endswith("_ch0.tif") for f in files):
@@ -225,8 +226,12 @@ def initialize_project(raw_dir: Path, output_parent_dir: Optional[Path] = None, 
     raw_linux = win_to_linux_path(raw_dir)
 
     if output_parent_dir is None:
-        date_tag = time.strftime("%Y%m%d")
-        output_parent_dir = SCRATCH_WIN_ROOT / "LeonK" / f"Analysis_{date_tag}"
+        parent_name = raw_dir.parent.name
+        if re.match(r"^\d{6,8}$", parent_name):
+            output_parent_dir = SCRATCH_WIN_ROOT / "LeonK" / f"Analysis{parent_name}"
+        else:
+            date_tag = time.strftime("%Y%m%d")
+            output_parent_dir = SCRATCH_WIN_ROOT / "LeonK" / f"Analysis_{date_tag}"
 
     output_parent_dir.mkdir(parents=True, exist_ok=True)
     out_linux_parent = win_to_linux_path(output_parent_dir)
@@ -243,12 +248,17 @@ def initialize_project(raw_dir: Path, output_parent_dir: Optional[Path] = None, 
         f"experimenter='{experimenter}'"
     )
     run_ssh_cmd(init_cmd)
-    time.sleep(2)
+    time.sleep(3)
 
     matching = [
         p for p in output_parent_dir.iterdir()
-        if p.is_dir() and (p / "project_config.yaml").exists()
+        if p.is_dir() and p.name.startswith(experimenter) and (p / "project_config.yaml").exists()
     ]
+    if not matching:
+        matching = [
+            p for p in output_parent_dir.iterdir()
+            if p.is_dir() and (p / "project_config.yaml").exists()
+        ]
     if not matching:
         raise RuntimeError(f"No project directory found inside {output_parent_dir} after initialization")
 
@@ -304,45 +314,32 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 
 cd "{project_linux}/snakemake"
-echo "=== WBFM Dual Tracking Master Started at $(date) on $(hostname) ==="
+echo "=== WBFM Pipeline Master Job Started at $(date) ==="
+echo "Host: $(hostname)"
+echo "Project Directory: {project_linux}"
 
-echo "[1/4] Unlocking Snakemake directory..."
-snakemake --unlock -s pipeline.smk 2>/dev/null || true
+echo "[1/3] Running Initial Pipeline Checks..."
+snakemake -s pipeline.smk --unlock || true
 
-echo "[2/4] Running Segmentation + SuperGlue Tracking + Calcium Traces..."
-bash RUNME.sh -s traces
-STATUS_TRACES=$?
-if [ $STATUS_TRACES -ne 0 ]; then
-    echo "[ERROR] Traces pipeline failed with exit code $STATUS_TRACES"
-    exit $STATUS_TRACES
+echo "[2/3] Running Main Snakemake Pipeline (StarDist Segmentation + SuperGlue Tracking + Calcium Traces)..."
+bash RUNME.sh
+STATUS_MAIN=$?
+if [ $STATUS_MAIN -ne 0 ]; then
+    echo "[WARNING] Main pipeline exited with code $STATUS_MAIN. Unlocking and retrying once..."
+    snakemake -s pipeline.smk --unlock || true
+    bash RUNME.sh
 fi
 
-echo "[3/4] Running Barlow Embedding (GPU) + Barlow Tracking..."
-bash RUNME.sh -s barlow_tracking
+echo "[3/3] Running Barlow Embedding (GPU Feature Extraction for ID Transfer)..."
+# Only generate barlow_embedding (embedding.zarr + feature indices) needed for ID transfer; bypass redundant Barlow tracking
+bash RUNME.sh -s barlow_embedding
 STATUS_BARLOW=$?
 if [ $STATUS_BARLOW -ne 0 ]; then
-    echo "[WARNING] Barlow tracking exited with code $STATUS_BARLOW"
-fi
-
-echo "[4/4] Generating Automated Barlow ID Transfer Annotations..."
-cd {DEFAULT_ID_TRANSFER_DIR}
-python run.py \\
-    --config config/pipeline_config.yaml \\
-    --recordings config/recordings_leon_25deg_train.yaml \\
-    --test-recordings "{id_test_yaml_linux}" \\
-    --phase transfer \\
-    --output "{project_linux}/3-tracking/id_transfer_output" || true
-
-# Copy generated manual_annotation.xlsx to standard location
-mkdir -p "{project_linux}/3-tracking/manual_annotation"
-if [ -f "{project_linux}/3-tracking/id_transfer_output/hungarian/manual_annotation.xlsx" ]; then
-    cp "{project_linux}/3-tracking/id_transfer_output/hungarian/manual_annotation.xlsx" \\
-       "{project_linux}/3-tracking/manual_annotation/manual_annotation.xlsx"
-    echo "[SUCCESS] Copied Hungarian predicted annotations to 3-tracking/manual_annotation/"
+    echo "[WARNING] Barlow embedding exited with code $STATUS_BARLOW"
 fi
 
 echo "PIPELINE_COMPLETE" > "{project_linux}/PIPELINE_COMPLETE.flag"
-echo "=== WBFM Dual Tracking Master Completed at $(date) ==="
+echo "=== WBFM Pipeline Master Completed at $(date) ==="
 """
 
     remote_submission = f"cat << 'EOF' | sbatch\n{master_script}EOF"
@@ -409,16 +406,15 @@ def verify_outputs(project_dir: Path) -> Dict[str, bool]:
         "Tracklets (all_tracklets.pickle)": tracklets.exists() and tracklets.stat().st_size > 0,
         "SuperGlue Tracks (combined_3d_tracks.h5)": sg_tracks.exists() and sg_tracks.stat().st_size > 0,
         "Barlow Embeddings (embedding.zarr)": bt_embed.exists(),
-        "Barlow Tracks (df_barlow_tracks.h5)": bt_tracks.exists() and bt_tracks.stat().st_size > 0,
         "Calcium Traces (green_traces.h5)": len(traces_candidates) > 0 and traces_candidates[0].stat().st_size > 0,
-        "Predicted Neuron IDs (manual_annotation.xlsx)": len(annot_candidates) > 0 and annot_candidates[0].stat().st_size > 0,
     }
 
 
 def process_single_worm(worm_raw_dir: Path, output_parent: Optional[Path], experimenter: str) -> Dict[str, Any]:
     """Process a single sanitized worm folder."""
     clean_raw = sanitize_raw_folder(worm_raw_dir)
-    proj_dir, proj_linux = initialize_project(clean_raw, output_parent, experimenter)
+    exp = worm_raw_dir.name if experimenter == "LeonK" else experimenter
+    proj_dir, proj_linux = initialize_project(clean_raw, output_parent, exp)
     job_id = submit_dual_pipeline(proj_dir, proj_linux)
     return {
         "raw": worm_raw_dir.name,
