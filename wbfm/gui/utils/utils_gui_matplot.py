@@ -17,7 +17,10 @@ import pandas as pd
 class PlotQWidget(QWidget):
     def __init__(self, *args, **kwargs):
         QWidget.__init__(self, *args, **kwargs)
-        self.setLayout(QVBoxLayout())
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self.setLayout(layout)
         self.canvas = PlotCanvas(self, width=10, height=3)
         self.toolbar = NavigationToolbar(self.canvas, self)
         self.layout().addWidget(self.toolbar)
@@ -25,6 +28,14 @@ class PlotQWidget(QWidget):
 
     def draw(self):
         self.canvas.draw()
+
+    def sizeHint(self):
+        from PyQt5.QtCore import QSize
+        return QSize(600, 200)
+
+    def minimumSizeHint(self):
+        from PyQt5.QtCore import QSize
+        return QSize(100, 60)
 
 
 class PlotCanvas(FigureCanvas):
@@ -34,6 +45,14 @@ class PlotCanvas(FigureCanvas):
         self.setParent(parent)
         FigureCanvas.setSizePolicy(self, QSizePolicy.Expanding, QSizePolicy.Expanding)
         FigureCanvas.updateGeometry(self)
+
+    def sizeHint(self):
+        from PyQt5.QtCore import QSize
+        return QSize(600, 180)
+
+    def minimumSizeHint(self):
+        from PyQt5.QtCore import QSize
+        return QSize(100, 50)
 
 
 class ClickableGridPlot:

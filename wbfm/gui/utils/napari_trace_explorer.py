@@ -66,6 +66,8 @@ class NapariTraceExplorer(QtWidgets.QWidget):
     def __init__(self, project_data: ProjectData, app: QApplication, **kwargs):
         for k, v in kwargs.items():
             setattr(self, k, v)
+        if self.load_tracklets and not project_data.has_tracklets():
+            self.load_tracklets = False
         if self.load_tracklets:
             project_data.check_data_desyncing(raise_error=True)
 
@@ -78,14 +80,42 @@ class NapariTraceExplorer(QtWidgets.QWidget):
         # Create a scroll area
         self.scroll = QtWidgets.QScrollArea()
         self.scroll.setWidgetResizable(True)
+        self.scroll.setMinimumWidth(200)
         
         # Create the inner widget and its layout to hold all UI elements
         self.verticalLayoutWidget = QtWidgets.QWidget()
         self.verticalLayout = QtWidgets.QVBoxLayout(self.verticalLayoutWidget)
+        self.verticalLayout.setContentsMargins(6, 6, 6, 6)
+        self.verticalLayout.setSpacing(6)
         
         # Set the inner widget as the scroll area's content
         self.scroll.setWidget(self.verticalLayoutWidget)
         main_layout.addWidget(self.scroll)
+
+        # Style dock widget with clean, readable, compact controls
+        self.setStyleSheet("""
+            QWidget {
+                font-size: 11px;
+            }
+            QGroupBox {
+                font-weight: bold;
+                margin-top: 6px;
+                padding-top: 8px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 6px;
+                padding: 0 3px;
+            }
+            QComboBox, QPushButton, QLineEdit {
+                font-size: 11px;
+                padding: 2px 4px;
+            }
+            QCheckBox {
+                font-size: 11px;
+                spacing: 5px;
+            }
+        """)
 
         self.dat = project_data
         self.main_window = app
@@ -114,6 +144,14 @@ class NapariTraceExplorer(QtWidgets.QWidget):
 
         # Load custom timeseries if available
         self._load_custom_timeseries()
+
+    def sizeHint(self):
+        from PyQt5.QtCore import QSize
+        return QSize(280, 600)
+
+    def minimumSizeHint(self):
+        from PyQt5.QtCore import QSize
+        return QSize(200, 100)
 
     def _load_custom_timeseries(self):
         """Load custom timeseries CSVs from behavior/custom_timeseries/ if available."""
@@ -170,8 +208,8 @@ class NapariTraceExplorer(QtWidgets.QWidget):
             self.vbox1.addWidget(self.changeTraceTrackletDropdown)
 
         if self.load_tracklets:
-            self.changeInteractivityCheckbox = QtWidgets.QCheckBox("Turn on interactivity? "
-                                                                   "NOTE: only Raw_segmentation layer is interactive")
+            self.changeInteractivityCheckbox = QtWidgets.QCheckBox("Turn on interactivity (Raw_segmentation)")
+            self.changeInteractivityCheckbox.setToolTip("NOTE: Only Raw_segmentation layer is interactive")
             self.changeInteractivityCheckbox.stateChanged.connect(self.update_interactivity)
             self.vbox1.addWidget(self.changeInteractivityCheckbox)
         else:
@@ -587,6 +625,7 @@ class NapariTraceExplorer(QtWidgets.QWidget):
 
     def _select_neuron_using_dropdown(self):
         self.logger.debug("USER: change neuron")
+        self.current_neuron_name = self.changeNeuronDropdown.currentText()
         self.update_gt_correction_interactivity()
         if not self._disable_callbacks:
             # self.update_dataframe_using_final_tracks_layer()
@@ -1391,6 +1430,10 @@ class NapariTraceExplorer(QtWidgets.QWidget):
         self.static_ax = self.mpl_widget.canvas.fig.subplots()
         self.reference_ax = self.static_ax.twinx()
         self.main_subplot_xlim = [0, self.dat.num_frames]
+        try:
+            self.mpl_widget.canvas.fig.subplots_adjust(left=0.06, right=0.94, top=0.88, bottom=0.18)
+        except Exception:
+            pass
         
         # Connect clicking to a time change
         # https://matplotlib.org/stable/users/event_handling.html
@@ -1890,7 +1933,10 @@ class NapariTraceExplorer(QtWidgets.QWidget):
             title = self.get_subplot_title()
 
         self.update_time_line()
-        self.static_ax.set_title(title)
+        self.static_ax.set_title(title, fontsize=10)
+        self.static_ax.tick_params(labelsize=9)
+        if hasattr(self, 'reference_ax') and self.reference_ax is not None:
+            self.reference_ax.tick_params(labelsize=9)
         print(f"Updating subplot with {len(self.static_ax.lines)} lines and title {title}")
         if preserve_xlims:
             self.static_ax.autoscale(axis='y')
@@ -2136,8 +2182,6 @@ class NapariTraceExplorer(QtWidgets.QWidget):
         """Shared helper: color neurons by correlation to a given timeseries y across the full 4D video."""
         df = self.df_of_current_traces
         val_to_plot = df.corrwith(y)
-        # Square but keep the sign; de-emphasizes very small correlations
-        val_to_plot = val_to_plot * np.abs(val_to_plot)
         which_layers = [('heatmap', 'custom_val_to_plot', layer_name)]
         heatmap_kwargs = dict(val_to_plot=val_to_plot, scale_to_minus_1_and_1=True)
         self.logger.debug(f'Calculated correlation values: {val_to_plot}')
@@ -2146,6 +2190,11 @@ class NapariTraceExplorer(QtWidgets.QWidget):
         if layer_name in self.viewer.layers:
             self.viewer.layers.remove(layer_name)
 
+        # Hide any existing correlation layers so they don't blend with this one
+        for l in list(self.viewer.layers):
+            if l.name.startswith('correlation_to_') and l.name != layer_name:
+                l.visible = False
+
         # Lower visibility/opacity of standard segmentation layers so the correlation colors stand out cleanly
         if 'Colored segmentation' in self.viewer.layers:
             self.viewer.layers['Colored segmentation'].visible = False
@@ -2153,7 +2202,7 @@ class NapariTraceExplorer(QtWidgets.QWidget):
             self.viewer.layers['Raw segmentation'].visible = False
 
         self.dat.add_layers_to_viewer(self.viewer, which_layers=which_layers, heatmap_kwargs=heatmap_kwargs,
-                                      layer_opt=dict(opacity=0.85))
+                                      layer_opt=dict(opacity=1.0))
         # Move manual_ids to top, so they are not obscured
         try:
             manual_layer = self.get_manual_id_layer()
@@ -2167,8 +2216,14 @@ class NapariTraceExplorer(QtWidgets.QWidget):
         """
         Get the correlation between the current neuron and all other neurons across the entire video.
         """
-        y = self.y_trace_mode
-        layer_name = f'correlation_to_{self.current_neuron_name}'
+        neuron_name = self.changeNeuronDropdown.currentText()
+        self.current_neuron_name = neuron_name
+        df = self.df_of_current_traces
+        if neuron_name in df.columns:
+            y = df[neuron_name]
+        else:
+            t, y = self.calculate_trace(trace_name=neuron_name)
+        layer_name = f'correlation_to_{neuron_name}'
         self._add_correlation_heatmap_layer(y, layer_name)
 
     def add_layer_colored_by_correlation_to_reference_trace(self):
@@ -2198,8 +2253,12 @@ def napari_trace_explorer_from_config(project_path: str, app=None,
                                       DEBUG=False, **kwargs):
     # A parent QT application must be initialized first
     os.environ["NAPARI_ASYNC"] = "1"
-    # os.environ["NAPARI_PERFMON"] = "1"
-    # os.environ["NAPARI_OCTREE"] = "1" # No effect in tests; seems to only matter in 2d
+    os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "0"
+    os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
+    if hasattr(Qt, "AA_EnableHighDpiScaling"):
+        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, False)
+    if hasattr(Qt, "AA_UseHighDpiPixmaps"):
+        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     start_time = time.time()
     if app is None:
         started_new_app = True
@@ -2222,6 +2281,9 @@ def napari_trace_explorer_from_config(project_path: str, app=None,
     # If I don't set this to false, need to debug custom dataframe here
     project_data.use_custom_padded_dataframe = False
     # project_data.load_interactive_properties()
+    if load_tracklets and not project_data.has_tracklets():
+        logging.info("Project has no tracklets available; disabling tracklet editing features")
+        load_tracklets = False
     ui, viewer = napari_trace_explorer(project_data, app=app, load_tracklets=load_tracklets, start_time=start_time,
                                        **kwargs)
 

@@ -510,8 +510,8 @@ class TestDashboardUI(unittest.TestCase):
         self.assertTrue(bool(flags & Qt.WindowMinMaxButtonsHint))
         self.assertTrue(bool(flags & Qt.WindowCloseButtonHint))
         self.assertTrue(self.dashboard.isSizeGripEnabled())
-        self.assertEqual(self.dashboard.minimumWidth(), 780)
-        self.assertEqual(self.dashboard.minimumHeight(), 460)
+        self.assertEqual(self.dashboard.minimumWidth(), 720)
+        self.assertEqual(self.dashboard.minimumHeight(), 420)
 
     def test_launch_selected_keep_open_standalone(self):
         """Verify dashboard stays open and launches subprocess in standalone mode with keep_open=True."""
@@ -642,7 +642,7 @@ class TestDashboardUI(unittest.TestCase):
     def test_inspector_scroll_and_sizing(self):
         """Verify inspector panel is wrapped in QScrollArea and respects minimum width to prevent squishing."""
         self.assertIsInstance(self.dashboard.inspector_panel, QScrollArea)
-        self.assertGreaterEqual(self.dashboard.inspector_panel.minimumWidth(), 340)
+        self.assertGreaterEqual(self.dashboard.inspector_panel.minimumWidth(), 280)
 
     def test_quick_glance_button_dynamic_text(self):
         """Verify Quick Glance button text reflects annotated count dynamically."""

@@ -1,5 +1,9 @@
+import os
 import argparse
 import logging
+
+os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "0"
+os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
 
 from wbfm.gui.utils.napari_trace_explorer import napari_trace_explorer_from_config
 
