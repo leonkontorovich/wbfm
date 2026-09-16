@@ -38,7 +38,8 @@ def detrend_exponential(y_with_nan):
     return ind, y_corrected
 
 
-def detrend_exponential_lmfit(y_with_nan, x=None, ind_subset=None, restore_mean_value=False, use_const=False):
+def detrend_exponential_lmfit(y_with_nan, x=None, ind_subset=None, restore_mean_value=False, use_const=False,
+                              num_exponentials=1):
     """
     Bleach correction via simple exponential fit, division, and (optionally) re-adding the mean
 
@@ -51,6 +52,9 @@ def detrend_exponential_lmfit(y_with_nan, x=None, ind_subset=None, restore_mean_
     restore_mean_value
     use_const: whether to add a constant to the fit (extra parameter), or use a raw exponential
         NOTE: if the exponential is very shallow (i.e. almost constant), this term can destabilize the fit
+    num_exponentials: number of summed exponential terms (default 1). A value of 2 can better capture
+        biexponential bleaching (fast + slow component), at the cost of 2 extra free parameters, which
+        can overfit short or noisy traces; only use where there is visible curvature and enough points.
 
     Returns
     -------
@@ -59,8 +63,10 @@ def detrend_exponential_lmfit(y_with_nan, x=None, ind_subset=None, restore_mean_
     from lmfit.models import ExponentialModel, ConstantModel
     original_mean = np.nanmean(y_with_nan)
 
-    exp_mod = ExponentialModel(prefix='exp_')
+    exp_mod = ExponentialModel(prefix='exp0_')
     model = exp_mod
+    for i in range(1, num_exponentials):
+        model = model + ExponentialModel(prefix=f'exp{i}_')
     if use_const:
         const_mod = ConstantModel(prefix='const_')
         model = model + const_mod
@@ -74,13 +80,28 @@ def detrend_exponential_lmfit(y_with_nan, x=None, ind_subset=None, restore_mean_
     out = None
 
     try:
-        pars = exp_mod.guess(y, x=x)
+        if num_exponentials == 1:
+            pars = exp_mod.guess(y, x=x)
+        else:
+            # Spread initial decay-constant guesses across well-separated scales (fast to slow) so the
+            # solver doesn't collapse the terms onto the same timescale; a weak separation here tends
+            # to make the fit redundant/unstable rather than capturing a genuine fast+slow decay.
+            pars = model.make_params()
+            span = max(float(np.ptp(np.asarray(x))), 1.0) if len(x) > 1 else 1.0
+            decay_guesses = np.geomspace(span * 0.05, span * 2, num_exponentials)
+            amp_weights = np.array([0.7, 0.3] + [0.1] * (num_exponentials - 2)) if num_exponentials >= 2 \
+                else np.array([1.0])
+            amp_weights = amp_weights / amp_weights.sum()
+            amp_total = max(float(np.asarray(y)[0]), 1.0)
+            for i in range(num_exponentials):
+                pars[f'exp{i}_amplitude'].set(value=amp_total * amp_weights[i], min=0)
+                pars[f'exp{i}_decay'].set(value=decay_guesses[i], min=1.0)
         if use_const:
             pars += const_mod.guess(y, x=x)
         out = model.fit(y, pars, x=x)
 
         comps = out.eval_components(x=x)
-        y_fit = comps['exp_']
+        y_fit = sum(comps[f'exp{i}_'] for i in range(num_exponentials))
         if use_const:
             y_fit += comps['const_']
         y_corrected = y / y_fit
@@ -108,11 +129,10 @@ def detrend_exponential_lmfit(y_with_nan, x=None, ind_subset=None, restore_mean_
         y_corrected_with_nan, y_fit = y_with_nan, np.mean(y_with_nan) * np.ones_like(y_with_nan)
         flag = False
 
+    y_corrected_with_nan = np.array(y_corrected_with_nan, dtype=float, copy=True)
     if restore_mean_value:
         # Ensure the array is writable (it may be read-only if it came from a
         # memory-mapped file or a fallback path that reuses the input array).
-        if not y_corrected_with_nan.flags.writeable:
-            y_corrected_with_nan = np.array(y_corrected_with_nan, dtype=float)
         y_corrected_with_nan *= original_mean / np.nanmean(y_corrected_with_nan)
 
     return y_corrected_with_nan, (y_fit, out, flag)
