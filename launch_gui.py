@@ -44,7 +44,7 @@ QDialog {
     background-color: #1e2227;
     color: #abb2bf;
     font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
-    font-size: 11px;
+    font-size: 12px;
 }
 QLabel {
     color: #abb2bf;
@@ -53,9 +53,9 @@ QLineEdit {
     background-color: #282c34;
     border: 1px solid #3e4451;
     border-radius: 6px;
-    padding: 5px 10px;
+    padding: 6px 12px;
     color: #ffffff;
-    font-size: 11px;
+    font-size: 12px;
 }
 QLineEdit:focus {
     border: 1px solid #61afef;
@@ -64,9 +64,10 @@ QPushButton {
     background-color: #2c313a;
     border: 1px solid #3e4451;
     border-radius: 6px;
-    padding: 4px 12px;
+    padding: 5px 14px;
     color: #dcdfe4;
     font-weight: 500;
+    font-size: 12px;
 }
 QPushButton:hover {
     background-color: #353b45;
@@ -80,8 +81,8 @@ QPushButton#chipButton {
     background-color: #21252b;
     border: 1px solid #3e4451;
     border-radius: 12px;
-    padding: 2px 10px;
-    font-size: 10px;
+    padding: 3px 12px;
+    font-size: 11px;
     color: #abb2bf;
 }
 QPushButton#chipButton:hover {
@@ -98,9 +99,9 @@ QPushButton#launchButton {
     background-color: #2e7d32;
     border: 1px solid #388e3c;
     color: #ffffff;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: bold;
-    padding: 7px 20px;
+    padding: 8px 22px;
     border-radius: 6px;
 }
 QPushButton#launchButton:hover {
@@ -116,8 +117,8 @@ QPushButton#actionButton {
     background-color: #2c313a;
     border: 1px solid #3e4451;
     border-radius: 5px;
-    padding: 3px 8px;
-    font-size: 10px;
+    padding: 4px 10px;
+    font-size: 11px;
     color: #dcdfe4;
 }
 QPushButton#actionButton:hover {
@@ -135,7 +136,7 @@ QTableWidget {
     selection-color: #ffffff;
 }
 QTableWidget::item {
-    padding: 2px 4px;
+    padding: 3px 6px;
 }
 QTableWidget::item:selected {
     background-color: #2c3e50;
@@ -144,9 +145,10 @@ QTableWidget::item:selected {
 QHeaderView::section {
     background-color: #1a1d23;
     color: #98c379;
-    padding: 4px 6px;
+    padding: 5px 8px;
     border: 1px solid #282c34;
     font-weight: bold;
+    font-size: 12px;
 }
 QMenu {
     background-color: #21252b;
@@ -170,7 +172,7 @@ QMenu::separator {
 QCheckBox {
     color: #abb2bf;
     spacing: 6px;
-    font-size: 11px;
+    font-size: 12px;
 }
 QCheckBox::indicator {
     width: 16px;
@@ -223,10 +225,10 @@ QPushButton#badgeChip {
     color: #98c379;
     border: 1px solid #2e5538;
     border-radius: 4px;
-    padding: 1px 5px;
-    font-size: 10px;
+    padding: 2px 6px;
+    font-size: 11px;
     font-weight: bold;
-    min-height: 16px;
+    min-height: 18px;
 }
 QPushButton#badgeChip:hover {
     background-color: #2c4a3b;
@@ -238,8 +240,8 @@ QPushButton#quickGlanceButton {
     color: #61afef;
     border: 1px solid #2d4f7c;
     border-radius: 5px;
-    padding: 4px 10px;
-    font-size: 10px;
+    padding: 5px 12px;
+    font-size: 11px;
     font-weight: bold;
 }
 QPushButton#quickGlanceButton:hover {
@@ -1008,12 +1010,12 @@ class QuickGlanceAnnotationDialog(QDialog):
         header_layout.setSpacing(4)
 
         title_lbl = QLabel(f"Recording: {rec_name}")
-        title_lbl.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        title_lbl.setFont(QFont("Segoe UI", 11, QFont.Bold))
         title_lbl.setStyleSheet("color: #ffffff;")
         header_layout.addWidget(title_lbl)
 
         self.lbl_summary = QLabel(self._build_summary_text())
-        self.lbl_summary.setStyleSheet("color: #56b6c2; font-size: 10px; font-weight: 500;")
+        self.lbl_summary.setStyleSheet("color: #56b6c2; font-size: 11px; font-weight: 500;")
         header_layout.addWidget(self.lbl_summary)
         layout.addWidget(header_card)
 
@@ -1029,7 +1031,7 @@ class QuickGlanceAnnotationDialog(QDialog):
 
         details = self.record.get("annotated_details", [])
         self.lbl_filter_count = QLabel(f"Showing {len(details)} of {len(details)}")
-        self.lbl_filter_count.setStyleSheet("color: #7f848e; font-size: 10px;")
+        self.lbl_filter_count.setStyleSheet("color: #7f848e; font-size: 11px;")
         filter_box.addWidget(self.lbl_filter_count)
         layout.addLayout(filter_box)
 
@@ -1115,14 +1117,14 @@ class QuickGlanceAnnotationDialog(QDialog):
             t_sort = int(m.group(1)) if m else track_id
             item_track = SortableTableWidgetItem(track_id, sort_key=t_sort)
             item_track.setTextAlignment(Qt.AlignCenter)
-            item_track.setFont(QFont("Consolas", 9))
+            item_track.setFont(QFont("Consolas", 10))
             self.table.setItem(r, 0, item_track)
 
             item_id1 = SortableTableWidgetItem(id1, sort_key=id1.lower())
             item_id1.setTextAlignment(Qt.AlignCenter)
             if id1:
                 item_id1.setForeground(QColor("#98c379"))
-                item_id1.setFont(QFont("Segoe UI", 9, QFont.Bold))
+                item_id1.setFont(QFont("Segoe UI", 10, QFont.Bold))
             else:
                 item_id1.setForeground(QColor("#5c6370"))
             self.table.setItem(r, 1, item_id1)
@@ -1510,7 +1512,7 @@ class WBFMRecordingDashboard(QDialog):
         # Title / Header
         header_box = QHBoxLayout()
         insp_title = QLabel("Inspector")
-        insp_title.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        insp_title.setFont(QFont("Segoe UI", 10, QFont.Bold))
         insp_title.setStyleSheet("color: #61afef;")
         header_box.addWidget(insp_title)
         header_box.addStretch()
@@ -1526,13 +1528,13 @@ class WBFMRecordingDashboard(QDialog):
 
         # Name & Path
         self.lbl_insp_name = QLabel("No selection")
-        self.lbl_insp_name.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        self.lbl_insp_name.setFont(QFont("Segoe UI", 10, QFont.Bold))
         self.lbl_insp_name.setStyleSheet("color: #ffffff;")
         self.lbl_insp_name.setWordWrap(True)
         layout.addWidget(self.lbl_insp_name)
 
         self.lbl_insp_path = QLabel("")
-        self.lbl_insp_path.setStyleSheet("color: #5c6370; font-size: 10px;")
+        self.lbl_insp_path.setStyleSheet("color: #5c6370; font-size: 10.5px;")
         self.lbl_insp_path.setWordWrap(True)
         layout.addWidget(self.lbl_insp_path)
 
@@ -1544,17 +1546,17 @@ class WBFMRecordingDashboard(QDialog):
 
         # Acquisition & Volumes
         self.lbl_insp_acq = QLabel("Volumes: - | Date: -")
-        self.lbl_insp_acq.setStyleSheet("color: #abb2bf; font-size: 10px;")
+        self.lbl_insp_acq.setStyleSheet("color: #abb2bf; font-size: 11px;")
         layout.addWidget(self.lbl_insp_acq)
 
         # Neurons & Annotation Progress
         ann_prog_header = QHBoxLayout()
         ann_title = QLabel("Annotation:")
-        ann_title.setStyleSheet("color: #abb2bf; font-weight: bold; font-size: 10px;")
+        ann_title.setStyleSheet("color: #abb2bf; font-weight: bold; font-size: 11px;")
         ann_prog_header.addWidget(ann_title)
         ann_prog_header.addStretch()
         self.lbl_insp_ann_stats = QLabel("0 / 0 (0.0%)")
-        self.lbl_insp_ann_stats.setStyleSheet("color: #e5c07b; font-weight: bold;")
+        self.lbl_insp_ann_stats.setStyleSheet("color: #e5c07b; font-weight: bold; font-size: 11px;")
         ann_prog_header.addWidget(self.lbl_insp_ann_stats)
         layout.addLayout(ann_prog_header)
 
@@ -1574,14 +1576,14 @@ class WBFMRecordingDashboard(QDialog):
         # Annotated Identities Header & Quick Glance Section
         identities_header_row = QHBoxLayout()
         self.lbl_ann_identities_header = QLabel("Annotated Identities (0 unique)")
-        self.lbl_ann_identities_header.setStyleSheet("color: #abb2bf; font-weight: bold; font-size: 10px;")
+        self.lbl_ann_identities_header.setStyleSheet("color: #abb2bf; font-weight: bold; font-size: 11px;")
         identities_header_row.addWidget(self.lbl_ann_identities_header)
         identities_header_row.addStretch()
         layout.addLayout(identities_header_row)
 
         # Bilateral Pair Summary
         self.lbl_bilateral_summary = QLabel("")
-        self.lbl_bilateral_summary.setStyleSheet("color: #56b6c2; font-size: 10px; font-style: italic;")
+        self.lbl_bilateral_summary.setStyleSheet("color: #56b6c2; font-size: 11px; font-style: italic;")
         layout.addWidget(self.lbl_bilateral_summary)
 
         # Prominent Full-Width Quick-Glance Button
@@ -1636,7 +1638,7 @@ class WBFMRecordingDashboard(QDialog):
             "traces": QLabel("• Traces: -"),
         }
         for lbl in self.chk_labels.values():
-            lbl.setStyleSheet("color: #7f848e; font-size: 10px;")
+            lbl.setStyleSheet("color: #7f848e; font-size: 11px;")
             self.pipeline_checklist.addWidget(lbl)
         layout.addLayout(self.pipeline_checklist)
 
@@ -1866,7 +1868,7 @@ class WBFMRecordingDashboard(QDialog):
         # Col 0: Recording Name
         name_item = SortableTableWidgetItem(rec.get("name", ""), sort_key=rec.get("name", "").lower())
         name_item.setData(Qt.UserRole, rec["path"])
-        name_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        name_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
         name_item.setForeground(QColor("#e5c07b" if rec.get("is_recent") else "#ffffff"))
         if rec.get("is_recent"):
             name_item.setToolTip("Recent")
@@ -1893,7 +1895,7 @@ class WBFMRecordingDashboard(QDialog):
             tip = f"{label}: Available" if val else f"{label}: Missing / Not generated"
             b_item = SortableTableWidgetItem(sym, sort_key=1 if val else 0)
             b_item.setTextAlignment(Qt.AlignCenter)
-            b_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
+            b_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
             b_item.setForeground(QColor(color))
             b_item.setToolTip(tip)
             self.table.setItem(row, col, b_item)
@@ -1904,7 +1906,7 @@ class WBFMRecordingDashboard(QDialog):
         tc_item = SortableTableWidgetItem(tc_text, sort_key=tc if tc is not None else -1)
         tc_item.setTextAlignment(Qt.AlignCenter)
         if tc is not None:
-            tc_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
+            tc_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
             tc_item.setForeground(QColor("#61afef"))
         else:
             tc_item.setForeground(QColor("#5c6370"))
@@ -1931,7 +1933,7 @@ class WBFMRecordingDashboard(QDialog):
         ann_item.setTextAlignment(Qt.AlignCenter)
         ann_item.setForeground(QColor(ann_color))
         if ac > 0:
-            ann_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
+            ann_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
         ann_item.setToolTip(ann_tip)
         self.table.setItem(row, 7, ann_item)
 
@@ -2015,7 +2017,7 @@ class WBFMRecordingDashboard(QDialog):
             self._clear_sidebar_badges()
             for k, lbl in self.chk_labels.items():
                 lbl.setText(f"• {k.capitalize()}: -")
-                lbl.setStyleSheet("color: #7f848e; font-size: 10px;")
+                lbl.setStyleSheet("color: #7f848e; font-size: 11px;")
             self.btn_open_folder.setEnabled(False)
             self.btn_open_excel.setEnabled(False)
             self.btn_open_cfg.setEnabled(False)
@@ -2081,7 +2083,7 @@ class WBFMRecordingDashboard(QDialog):
             sym = "✓" if done else "✗"
             col = "#98c379" if done else "#e06c75"
             self.chk_labels[key].setText(f"{sym} {label}")
-            self.chk_labels[key].setStyleSheet(f"color: {col}; font-weight: {'bold' if done else 'normal'}; font-size: 10px;")
+            self.chk_labels[key].setStyleSheet(f"color: {col}; font-weight: {'bold' if done else 'normal'}; font-size: 11px;")
 
         # Actions
         self.btn_open_folder.setEnabled(bool(path_str and os.path.exists(path_str)))
