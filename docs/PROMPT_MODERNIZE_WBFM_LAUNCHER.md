@@ -47,16 +47,21 @@ Implement a searchable, sortable table (`QTableWidget` or `QTreeView`) displayin
   - Plus any custom directories or recent history in `.recent_projects.json`.
 * **Asynchronous / Non-Blocking Metadata Scanner**:
   - Scanning network directories on `Z:\` must run in a background worker thread (`QThread`), populating rows asynchronously with a progress indicator so the UI NEVER freezes.
-* **Informative Dashboard Columns**:
-  1. **Recording Name & Date**: e.g., `AX10059worm1-2026-09-04`.
-  2. **Pipeline Status Badges**:
+* **Streamlined 8 Dashboard Columns**:
+  1. **Recording Name**: Stretched main column (e.g. `AX10059worm1-2026-04-10`).
+  2. **Date**: Acquisition date parsed from recording name or file metadata.
+  3. **Pipeline Status Badges**:
      - StarDist Masks (`masks.zarr` / `metadata.pickle`) [✓ / ✗]
      - 3D SuperGlue Tracks (`combined_3d_tracks.h5`) [✓ / ✗]
      - Calcium Traces (`green_traces.h5`) [✓ / ✗]
      - Barlow Tracker (`worm_tracker_barlow.pickle`) [✓ / ✗]
-  3. **Total Tracked Neurons**: Count of tracked neurons extracted from `combined_3d_tracks.h5` or traces.
-  4. **ID'd Neurons Count**: Fast inspection of `manual_annotation.h5` or `manual_annotation.xlsx` (e.g. `24 / 185 annotated`).
-  5. **Identities Preview & Quick-Glance**: Live preview of identified neurons with one-click modal inspector (`QuickGlanceAnnotationDialog`), bilateral pair analysis, and clipboard export.
+  4. **Total Tracked Neurons**: Count of tracked neurons extracted from `combined_3d_tracks.h5` or traces headers.
+  5. **Annotated Neurons Count**: Fast inspection of `manual_annotation.h5` or `manual_annotation.xlsx` (e.g. `28 / 180`). Double-clicking opens `QuickGlanceAnnotationDialog`.
+
+* **Spacious, Scrollable Inspector Sidebar**:
+  - Resilient `QScrollArea` wrapping to prevent vertical or horizontal squishing across displays and scaling levels.
+  - Dedicated full-width `🔍 View Annotated Neurons (N)` action button and bilateral pair stats summary (`10 pairs, 8 unpaired`).
+  - Searchable chip badge flow and real-time badge filter.
 
 #### 3. Search, Filter & Quick-Actions
 * **Search / Filter Bar**: Real-time filtering by recording name, strain (`AX10059`, `ZIM2554`, `N2`), date, or condition.

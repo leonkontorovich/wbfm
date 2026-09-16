@@ -29,7 +29,7 @@ from launch_gui import (
     FlowLayout,
     DARK_THEME_QSS,
 )
-from qtpy.QtWidgets import QApplication
+from qtpy.QtWidgets import QApplication, QHeaderView, QScrollArea
 from qtpy.QtCore import Qt, QTimer
 
 
@@ -179,6 +179,24 @@ class TestMetadataExtraction(unittest.TestCase):
             self.assertEqual(meta["annotated_names"], [])
             self.assertEqual(meta["annotated_details"], [])
 
+    def test_candidate_annotation_paths(self):
+        import pandas as pd
+        proj_dir = os.path.join(self.test_dir, "AX10059worm2-2026-04-10")
+        ann_dir = os.path.join(proj_dir, "3-tracking", "id_transfer_output", "hungarian")
+        os.makedirs(ann_dir, exist_ok=True)
+        df = pd.DataFrame({
+            "Neuron ID": [1, 2],
+            "ID1": ["AVAL", "AVAR"],
+            "Certainty": [2, 2],
+        })
+        ann_path = os.path.join(ann_dir, "manual_annotation.xlsx")
+        df.to_excel(ann_path, index=False)
+
+        meta = extract_metadata_for_project(proj_dir)
+        self.assertEqual(meta["annotated_count"], 2)
+        self.assertEqual(meta["annotated_names"], ["AVAL", "AVAR"])
+        self.assertEqual(meta["excel_path"], ann_path)
+
 
 class TestScannerResilience(unittest.TestCase):
     """
@@ -247,7 +265,11 @@ class TestDashboardUI(unittest.TestCase):
         self.dashboard.close()
 
     def test_dashboard_initialization(self):
-        self.assertEqual(self.dashboard.table.columnCount(), 10)
+        self.assertEqual(self.dashboard.table.columnCount(), 8)
+        self.assertEqual(
+            self.dashboard.columns,
+            ["Recording", "Date", "Masks", "Tracks", "Traces", "Barlow", "Neurons", "Annotated"]
+        )
         self.assertTrue(self.dashboard.chk_fast_mode.isChecked())
         self.assertFalse(self.dashboard.chk_full_tracklets.isChecked())
 
@@ -440,7 +462,15 @@ class TestDashboardUI(unittest.TestCase):
         test_cache = {
             r"C:\fake\proj": {
                 "mtime": 12345.6,
-                "metadata": {"name": "cached_name"}
+                "metadata": {
+                    "name": "cached_name",
+                    "annotated_names": ["AVAL"],
+                    "annotated_details": [{"track_id": "neuron_001", "id1": "AVAL"}],
+                }
+            },
+            r"C:\fake\stale": {
+                "mtime": 12345.6,
+                "metadata": {"name": "stale_name"}
             }
         }
         with tempfile.NamedTemporaryFile("w", delete=False) as f:
@@ -452,6 +482,8 @@ class TestDashboardUI(unittest.TestCase):
                 loaded = load_metadata_cache()
                 self.assertIn(r"C:\fake\proj", loaded)
                 self.assertEqual(loaded[r"C:\fake\proj"]["metadata"]["name"], "cached_name")
+                # Stale entry without annotated_names must be excluded
+                self.assertNotIn(r"C:\fake\stale", loaded)
         finally:
             if os.path.exists(temp_cache_file):
                 os.remove(temp_cache_file)
@@ -581,19 +613,52 @@ class TestDashboardUI(unittest.TestCase):
 
         with unittest.mock.patch.object(self.dashboard, "_open_quick_glance_dialog") as mock_glance, \
              unittest.mock.patch.object(self.dashboard, "_launch_selected") as mock_launch:
-            # Double click on Column 8 (Identities Preview)
-            item_prev = self.dashboard.table.item(0, 8)
-            self.dashboard._on_table_double_clicked(item_prev)
-            mock_glance.assert_called_once()
-            mock_launch.assert_not_called()
-
-        with unittest.mock.patch.object(self.dashboard, "_open_quick_glance_dialog") as mock_glance, \
-             unittest.mock.patch.object(self.dashboard, "_launch_selected") as mock_launch:
             # Double click on Column 0 (Recording) -> should launch
             item_rec = self.dashboard.table.item(0, 0)
             self.dashboard._on_table_double_clicked(item_rec)
             mock_glance.assert_not_called()
             mock_launch.assert_called_once()
+
+        with unittest.mock.patch.object(self.dashboard, "_open_quick_glance_dialog") as mock_glance, \
+             unittest.mock.patch.object(self.dashboard, "_launch_selected") as mock_launch:
+            # Double click on Column 1 (Date) -> should launch
+            item_date = self.dashboard.table.item(0, 1)
+            self.dashboard._on_table_double_clicked(item_date)
+            mock_glance.assert_not_called()
+            mock_launch.assert_called_once()
+
+    def test_columns_streamlined(self):
+        """Verify dashboard table has exactly 8 columns and excludes Identities Preview and Location."""
+        self.assertEqual(len(self.dashboard.columns), 8)
+        self.assertNotIn("Identities Preview", self.dashboard.columns)
+        self.assertNotIn("Location", self.dashboard.columns)
+        self.assertEqual(
+            self.dashboard.columns,
+            ["Recording", "Date", "Masks", "Tracks", "Traces", "Barlow", "Neurons", "Annotated"]
+        )
+        header = self.dashboard.table.horizontalHeader()
+        self.assertEqual(header.sectionResizeMode(0), QHeaderView.Stretch)
+
+    def test_inspector_scroll_and_sizing(self):
+        """Verify inspector panel is wrapped in QScrollArea and respects minimum width to prevent squishing."""
+        self.assertIsInstance(self.dashboard.inspector_panel, QScrollArea)
+        self.assertGreaterEqual(self.dashboard.inspector_panel.minimumWidth(), 340)
+
+    def test_quick_glance_button_dynamic_text(self):
+        """Verify Quick Glance button text reflects annotated count dynamically."""
+        rec_empty = {"name": "EmptyRec", "annotated_names": [], "annotated_details": []}
+        self.dashboard._update_inspector(rec_empty)
+        self.assertEqual(self.dashboard.btn_quick_glance.text(), "🔍 View Annotated Neurons")
+        self.assertFalse(self.dashboard.btn_quick_glance.isEnabled())
+
+        rec_with_ann = {
+            "name": "PopulatedRec",
+            "annotated_names": ["AVAL", "AVAR"],
+            "annotated_details": [{"track_id": "neuron_001", "id1": "AVAL"}, {"track_id": "neuron_002", "id1": "AVAR"}],
+        }
+        self.dashboard._update_inspector(rec_with_ann)
+        self.assertEqual(self.dashboard.btn_quick_glance.text(), "🔍 View Annotated Neurons (2)")
+        self.assertTrue(self.dashboard.btn_quick_glance.isEnabled())
 
 
 class TestQuickGlanceAnnotationDialog(unittest.TestCase):

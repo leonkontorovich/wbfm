@@ -234,16 +234,16 @@ QPushButton#badgeChip:hover {
     color: #ffffff;
 }
 QPushButton#quickGlanceButton {
-    background-color: #21252b;
+    background-color: #1e3148;
     color: #61afef;
-    border: 1px solid #3e4451;
-    border-radius: 4px;
-    padding: 3px 8px;
-    font-size: 11px;
+    border: 1px solid #2d4f7c;
+    border-radius: 5px;
+    padding: 6px 12px;
+    font-size: 12px;
     font-weight: bold;
 }
 QPushButton#quickGlanceButton:hover {
-    background-color: #2c313a;
+    background-color: #264263;
     border-color: #61afef;
     color: #ffffff;
 }
@@ -337,13 +337,24 @@ def save_custom_roots(roots: List[str]):
 
 
 def load_metadata_cache() -> Dict[str, Any]:
-    """Loads cached project metadata with mtime keys."""
+    """Loads cached project metadata with mtime keys and schema validation."""
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict):
-                    return data
+                    # Filter out stale cache entries from previous schema versions
+                    cleaned = {}
+                    for k, v in data.items():
+                        if (
+                            isinstance(v, dict)
+                            and "metadata" in v
+                            and isinstance(v["metadata"], dict)
+                            and "annotated_names" in v["metadata"]
+                            and "annotated_details" in v["metadata"]
+                        ):
+                            cleaned[k] = v
+                    return cleaned
         except Exception:
             pass
     return {}
@@ -373,10 +384,16 @@ def extract_metadata_for_project(project_dir: str, cache: Optional[Dict[str, Any
     except Exception:
         current_mtime = 0
 
-    # Return cached record if mtime hasn't changed
+    # Return cached record if mtime hasn't changed and required schema keys exist
     if cache is not None and project_dir in cache:
         cached = cache[project_dir]
-        if cached.get("mtime") == current_mtime and "metadata" in cached:
+        if (
+            cached.get("mtime") == current_mtime
+            and "metadata" in cached
+            and isinstance(cached["metadata"], dict)
+            and "annotated_names" in cached["metadata"]
+            and "annotated_details" in cached["metadata"]
+        ):
             return cached["metadata"]
 
     cfg_candidate = os.path.join(project_dir, "project_config.yaml")
@@ -469,12 +486,26 @@ def extract_metadata_for_project(project_dir: str, cache: Optional[Dict[str, Any
         pass
 
     # ID'd Neurons Count & Annotated Identities
-    ann_h5 = os.path.join(project_dir, "3-tracking", "manual_annotation", "manual_annotation.h5")
-    ann_xlsx = os.path.join(project_dir, "3-tracking", "manual_annotation", "manual_annotation.xlsx")
-    if os.path.exists(ann_xlsx):
-        meta["excel_path"] = ann_xlsx
+    ann_candidates = [
+        os.path.join(project_dir, "3-tracking", "manual_annotation", "manual_annotation.h5"),
+        os.path.join(project_dir, "3-tracking", "manual_annotation", "manual_annotation.xlsx"),
+        os.path.join(project_dir, "3-tracking", "manual_annotation", "manual_annotation_iterative.xlsx"),
+        os.path.join(project_dir, "3-tracking", "manual_annotation", "manual_annotation_hungarian.xlsx"),
+        os.path.join(project_dir, "3-tracking", "id_transfer_output", "hungarian", "manual_annotation.xlsx"),
+        os.path.join(project_dir, "3-tracking", "hungarian", "manual_annotation.xlsx"),
+        os.path.join(project_dir, "manual_annotation.xlsx"),
+    ]
 
-    ann_target = ann_h5 if os.path.exists(ann_h5) else (ann_xlsx if os.path.exists(ann_xlsx) else None)
+    for cand in ann_candidates:
+        if cand.endswith(".xlsx") and os.path.exists(cand):
+            meta["excel_path"] = cand
+            break
+
+    ann_target = None
+    for cand in ann_candidates:
+        if os.path.exists(cand):
+            ann_target = cand
+            break
 
     if ann_target:
         try:
@@ -638,7 +669,12 @@ class RecordingScannerWorker(QThread):
                 date_str = date_m.group(1) if date_m else ""
 
                 # If in cache, yield cached right away
-                if not self.bypass_cache and p_dir in self.cache and "metadata" in self.cache[p_dir]:
+                if (
+                    not self.bypass_cache
+                    and p_dir in self.cache
+                    and "metadata" in self.cache[p_dir]
+                    and "annotated_names" in self.cache[p_dir]["metadata"]
+                ):
                     cached_meta = dict(self.cache[p_dir]["metadata"])
                     cached_meta["is_recent"] = True
                     self.recording_discovered.emit(cached_meta)
@@ -730,7 +766,12 @@ class RecordingScannerWorker(QThread):
                             projects_to_inspect.append(full_sub)
 
                             # If in cache, emit cached info immediately
-                            if not self.bypass_cache and full_sub in self.cache and "metadata" in self.cache[full_sub]:
+                            if (
+                                not self.bypass_cache
+                                and full_sub in self.cache
+                                and "metadata" in self.cache[full_sub]
+                                and "annotated_names" in self.cache[full_sub]["metadata"]
+                            ):
                                 self.recording_discovered.emit(self.cache[full_sub]["metadata"])
                             else:
                                 name = sub
@@ -1327,11 +1368,10 @@ class WBFMRecordingDashboard(QDialog):
         table_container = QWidget()
         table_layout = QVBoxLayout(table_container)
         table_layout.setContentsMargins(0, 0, 0, 0)
-
         self.table = QTableWidget()
         self.columns = [
             "Recording", "Date", "Masks", "Tracks", "Traces", "Barlow",
-            "Neurons", "Annotated", "Identities Preview", "Location"
+            "Neurons", "Annotated"
         ]
         self.table.setColumnCount(len(self.columns))
         self.table.setHorizontalHeaderLabels(self.columns)
@@ -1345,20 +1385,18 @@ class WBFMRecordingDashboard(QDialog):
         self.table.customContextMenuRequested.connect(self._show_context_menu)
 
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.Fixed)
-        self.table.setColumnWidth(2, 60)
+        self.table.setColumnWidth(2, 58)
         header.setSectionResizeMode(3, QHeaderView.Fixed)
-        self.table.setColumnWidth(3, 70)
+        self.table.setColumnWidth(3, 68)
         header.setSectionResizeMode(4, QHeaderView.Fixed)
-        self.table.setColumnWidth(4, 60)
+        self.table.setColumnWidth(4, 58)
         header.setSectionResizeMode(5, QHeaderView.Fixed)
-        self.table.setColumnWidth(5, 60)
+        self.table.setColumnWidth(5, 58)
         header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(9, QHeaderView.Stretch)
 
         self.table.itemSelectionChanged.connect(self._on_table_selection_changed)
         self.table.itemDoubleClicked.connect(self._on_table_double_clicked)
@@ -1369,12 +1407,17 @@ class WBFMRecordingDashboard(QDialog):
         self.inspector_panel = self._create_inspector_panel()
         self.splitter.addWidget(self.inspector_panel)
 
-        # Set splitter sizes (75% table, 25% inspector)
+        # Set splitter sizes (table on left, inspector on right)
         saved_splitter = self.settings.value("splitter_state")
         if saved_splitter:
             self.splitter.restoreState(saved_splitter)
+            sizes = self.splitter.sizes()
+            if len(sizes) >= 2 and sizes[1] < 340:
+                total_w = sum(sizes) if sum(sizes) > 0 else 1260
+                insp_w = max(380, int(total_w * 0.33))
+                self.splitter.setSizes([total_w - insp_w, insp_w])
         else:
-            self.splitter.setSizes([850, 350])
+            self.splitter.setSizes([760, 400])
 
         main_layout.addWidget(self.splitter, stretch=1)
 
@@ -1444,13 +1487,19 @@ class WBFMRecordingDashboard(QDialog):
         main_layout.addLayout(status_row)
 
     def _create_inspector_panel(self) -> QWidget:
-        """Constructs the right-hand Inspector Sidebar."""
+        """Constructs the right-hand Inspector Sidebar wrapped in a scroll area."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setMinimumWidth(340)
+        scroll.setStyleSheet("QScrollArea { background-color: transparent; border: none; }")
+
         panel = QFrame()
         panel.setObjectName("inspectorFrame")
-        panel.setMinimumWidth(280)
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(10)
 
         # Title / Header
         header_box = QHBoxLayout()
@@ -1493,36 +1542,49 @@ class WBFMRecordingDashboard(QDialog):
         layout.addWidget(self.lbl_insp_acq)
 
         # Neurons & Annotation Progress
-        layout.addWidget(QLabel("Annotation:"))
+        ann_prog_header = QHBoxLayout()
+        ann_title = QLabel("Annotation:")
+        ann_title.setStyleSheet("color: #abb2bf; font-weight: bold; font-size: 12px;")
+        ann_prog_header.addWidget(ann_title)
+        ann_prog_header.addStretch()
         self.lbl_insp_ann_stats = QLabel("0 / 0 (0.0%)")
         self.lbl_insp_ann_stats.setStyleSheet("color: #e5c07b; font-weight: bold;")
-        layout.addWidget(self.lbl_insp_ann_stats)
+        ann_prog_header.addWidget(self.lbl_insp_ann_stats)
+        layout.addLayout(ann_prog_header)
 
         self.insp_progress = QProgressBar()
         self.insp_progress.setRange(0, 100)
         self.insp_progress.setValue(0)
+        self.insp_progress.setFixedHeight(16)
         self.insp_progress.setTextVisible(True)
         layout.addWidget(self.insp_progress)
 
-        # Annotated Identities Quick-Glance Pane
-        ann_header_layout = QHBoxLayout()
+        # Divider
+        divider2 = QFrame()
+        divider2.setFrameShape(QFrame.HLine)
+        divider2.setStyleSheet("color: #2c313a;")
+        layout.addWidget(divider2)
+
+        # Annotated Identities Header & Quick Glance Section
+        identities_header_row = QHBoxLayout()
         self.lbl_ann_identities_header = QLabel("Annotated Identities (0 unique)")
         self.lbl_ann_identities_header.setStyleSheet("color: #abb2bf; font-weight: bold; font-size: 12px;")
-        ann_header_layout.addWidget(self.lbl_ann_identities_header)
-        ann_header_layout.addStretch()
-
-        self.btn_quick_glance = QPushButton("🔍 Quick Glance")
-        self.btn_quick_glance.setObjectName("quickGlanceButton")
-        self.btn_quick_glance.setEnabled(False)
-        self.btn_quick_glance.setToolTip("Open full searchable neuron annotation viewer")
-        self.btn_quick_glance.clicked.connect(self._on_quick_glance_clicked)
-        ann_header_layout.addWidget(self.btn_quick_glance)
-        layout.addLayout(ann_header_layout)
+        identities_header_row.addWidget(self.lbl_ann_identities_header)
+        identities_header_row.addStretch()
+        layout.addLayout(identities_header_row)
 
         # Bilateral Pair Summary
         self.lbl_bilateral_summary = QLabel("")
         self.lbl_bilateral_summary.setStyleSheet("color: #56b6c2; font-size: 11px; font-style: italic;")
         layout.addWidget(self.lbl_bilateral_summary)
+
+        # Prominent Full-Width Quick-Glance Button
+        self.btn_quick_glance = QPushButton("🔍 View Annotated Neurons")
+        self.btn_quick_glance.setObjectName("quickGlanceButton")
+        self.btn_quick_glance.setEnabled(False)
+        self.btn_quick_glance.setToolTip("Open full searchable neuron annotation viewer")
+        self.btn_quick_glance.clicked.connect(self._on_quick_glance_clicked)
+        layout.addWidget(self.btn_quick_glance)
 
         # Mini Filter
         self.ann_filter_input = QLineEdit()
@@ -1530,7 +1592,7 @@ class WBFMRecordingDashboard(QDialog):
         self.ann_filter_input.setClearButtonEnabled(True)
         self.ann_filter_input.setStyleSheet(
             "background-color: #21252b; color: #abb2bf; border: 1px solid #3e4451; "
-            "border-radius: 3px; padding: 2px 6px; font-size: 11px;"
+            "border-radius: 3px; padding: 3px 8px; font-size: 11px;"
         )
         self.ann_filter_input.textChanged.connect(self._filter_sidebar_badges)
         layout.addWidget(self.ann_filter_input)
@@ -1538,7 +1600,8 @@ class WBFMRecordingDashboard(QDialog):
         # Interactive Badge Flow (Scrollable)
         self.ann_badges_scroll = QScrollArea()
         self.ann_badges_scroll.setWidgetResizable(True)
-        self.ann_badges_scroll.setFixedHeight(115)
+        self.ann_badges_scroll.setMinimumHeight(45)
+        self.ann_badges_scroll.setMaximumHeight(130)
         self.ann_badges_scroll.setStyleSheet(
             "QScrollArea { background-color: #1a1d23; border: 1px solid #282c34; border-radius: 4px; }"
             "QWidget { background-color: #1a1d23; }"
@@ -1550,8 +1613,14 @@ class WBFMRecordingDashboard(QDialog):
         layout.addWidget(self.ann_badges_scroll)
         self.ann_badges: List[Tuple[str, QWidget]] = []
 
+        # Divider
+        divider3 = QFrame()
+        divider3.setFrameShape(QFrame.HLine)
+        divider3.setStyleSheet("color: #2c313a;")
+        layout.addWidget(divider3)
+
         # Pipeline Status Checklist
-        layout.addWidget(QLabel("Pipeline:"))
+        layout.addWidget(QLabel("Pipeline Status:"))
         self.pipeline_checklist = QVBoxLayout()
         self.pipeline_checklist.setSpacing(3)
         self.chk_labels = {
@@ -1599,7 +1668,9 @@ class WBFMRecordingDashboard(QDialog):
         actions_box.addWidget(self.btn_copy_path)
 
         layout.addLayout(actions_box)
-        return panel
+
+        scroll.setWidget(panel)
+        return scroll
 
     def _rebuild_strain_chips(self):
         """Rebuilds strain filter chips dynamically."""
@@ -1836,46 +1907,27 @@ class WBFMRecordingDashboard(QDialog):
         # Col 7: ID'd Neurons Count
         ac = rec.get("annotated_count", 0)
         at = rec.get("annotated_total", 0)
+        ann_names = rec.get("annotated_names", [])
         if at > 0 or ac > 0:
             ann_text = f"{ac} / {at}" if at > 0 else f"{ac}"
             ann_sort = ac
             ann_color = "#98c379" if ac > 0 else "#e06c75"
+            if ann_names:
+                ann_tip = f"{ac} annotated neurons ({len(ann_names)} unique identities)\nDouble-click to open Quick Glance viewer"
+            else:
+                ann_tip = f"{ac} of {at} neurons annotated\nDouble-click to open Quick Glance viewer"
         else:
             ann_text = "-"
             ann_sort = -1
             ann_color = "#5c6370"
+            ann_tip = "No annotations available"
         ann_item = SortableTableWidgetItem(ann_text, sort_key=ann_sort)
         ann_item.setTextAlignment(Qt.AlignCenter)
         ann_item.setForeground(QColor(ann_color))
         if ac > 0:
             ann_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        ann_item.setToolTip(ann_tip)
         self.table.setItem(row, 7, ann_item)
-
-        # Col 8: Identities Preview
-        ann_names = rec.get("annotated_names", [])
-        if ann_names:
-            if len(ann_names) <= 4:
-                preview_text = " · ".join(ann_names)
-            else:
-                preview_text = " · ".join(ann_names[:4]) + f" (+{len(ann_names) - 4})"
-            preview_color = "#56b6c2"
-            preview_tip = f"Identities ({len(ann_names)} unique):\n{', '.join(ann_names)}\n\n(Double-click to open Quick Glance)"
-        else:
-            preview_text = "-"
-            preview_color = "#5c6370"
-            preview_tip = "No annotated identities"
-        preview_item = SortableTableWidgetItem(preview_text, sort_key=len(ann_names))
-        preview_item.setTextAlignment(Qt.AlignCenter)
-        preview_item.setForeground(QColor(preview_color))
-        preview_item.setToolTip(preview_tip)
-        self.table.setItem(row, 8, preview_item)
-
-        # Col 9: Location
-        loc_str = rec.get("path", "")
-        loc_item = SortableTableWidgetItem(loc_str, sort_key=loc_str.lower())
-        loc_item.setForeground(QColor("#7f848e"))
-        loc_item.setToolTip(loc_str)
-        self.table.setItem(row, 9, loc_item)
 
     # --------------------------------------------------------------------------
     # Search & Filter Logic
@@ -1947,13 +1999,14 @@ class WBFMRecordingDashboard(QDialog):
             self.lbl_insp_strain.setVisible(False)
             self.lbl_insp_path.setText("")
             self.lbl_insp_acq.setText("Volumes: - | Date: -")
-            self.lbl_insp_ann_stats.setText("0 / 0 annotated (0.0%)")
+            self.lbl_insp_ann_stats.setText("0 / 0 (0.0%)")
             self.insp_progress.setValue(0)
             self.lbl_ann_identities_header.setText("Annotated Identities (0 unique)")
             self.lbl_bilateral_summary.setText("")
+            self.btn_quick_glance.setText("🔍 View Annotated Neurons")
+            self.btn_quick_glance.setEnabled(False)
             self.ann_filter_input.clear()
             self._clear_sidebar_badges()
-            self.btn_quick_glance.setEnabled(False)
             for k, lbl in self.chk_labels.items():
                 lbl.setText(f"• {k.capitalize()}: -")
                 lbl.setStyleSheet("color: #7f848e; font-size: 12px;")
@@ -2000,6 +2053,12 @@ class WBFMRecordingDashboard(QDialog):
 
         has_ann_or_excel = (len(ann_names) > 0 or len(ann_details) > 0 or bool(rec.get("excel_path")))
         self.btn_quick_glance.setEnabled(has_ann_or_excel)
+        if len(ann_names) > 0:
+            self.btn_quick_glance.setText(f"🔍 View Annotated Neurons ({len(ann_names)})")
+        elif len(ann_details) > 0:
+            self.btn_quick_glance.setText(f"🔍 View Annotated Neurons ({len(ann_details)})")
+        else:
+            self.btn_quick_glance.setText("🔍 View Annotated Neurons")
 
         # Rebuild badge chips
         self._rebuild_sidebar_badges(ann_names, ann_details)
@@ -2212,8 +2271,8 @@ class WBFMRecordingDashboard(QDialog):
         self._on_table_selection_changed()
         if not item:
             return
-        # If double clicked on "Annotated" (Col 7) or "Identities Preview" (Col 8), open Quick Glance
-        if item.column() in (7, 8) and self.selected_record:
+        # If double clicked on "Annotated" (Col 7), open Quick Glance
+        if item.column() == 7 and self.selected_record:
             self._open_quick_glance_dialog(self.selected_record)
         elif self.selected_project_path:
             self._launch_selected(self.selected_project_path, self.chk_full_tracklets.isChecked())
