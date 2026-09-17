@@ -31,6 +31,7 @@ import shutil
 import logging
 import argparse
 import subprocess
+import yaml
 from pathlib import Path
 from typing import Tuple, Optional, Dict, Any, List
 
@@ -221,7 +222,28 @@ def sanitize_raw_folder(raw_dir: Path) -> Path:
     return raw_dir
 
 
-def initialize_project(raw_dir: Path, output_parent_dir: Optional[Path] = None, experimenter: str = "LeonK") -> Tuple[Path, str]:
+def _load_physical_unit_overrides(raw_dir: Path) -> str:
+    """Read the acquisition config.yaml in the raw folder and build sacred CLI
+    overrides for the physical_units the project template requires.
+    `exposure_time` has no default on the cluster template and must be passed
+    explicitly, or 0a-create_new_project.py raises IncompleteConfigFileError."""
+    cfg_file = raw_dir / "config.yaml"
+    if not cfg_file.exists():
+        return ""
+    with open(cfg_file, "r") as f:
+        acq = yaml.safe_load(f) or {}
+
+    overrides = []
+    exposure_time = acq.get("exposure_time")
+    if exposure_time is not None:
+        overrides.append(f"physical_units.exposure_time={exposure_time}")
+    z_step_size = acq.get("z_step_size")
+    if z_step_size is not None:
+        overrides.append(f"physical_units.zimmer_um_per_pixel_z={z_step_size}")
+    return " ".join(overrides)
+
+
+def initialize_project(raw_dir: Path, output_parent_dir: Optional[Path] = None, experimenter: str = "LeonK", immobilized: bool = False) -> Tuple[Path, str]:
     """Initialize WBFM project on LISC cluster and configure for dual tracking."""
     raw_linux = win_to_linux_path(raw_dir)
 
@@ -240,12 +262,15 @@ def initialize_project(raw_dir: Path, output_parent_dir: Optional[Path] = None, 
     logger.info(f"  Raw:     {raw_linux}")
     logger.info(f"  Output:  {out_linux_parent}")
 
+    physical_unit_overrides = _load_physical_unit_overrides(raw_dir)
+
     init_cmd = (
         f"{CLUSTER_ENV_PYTHON} "
         f"{SCRATCH_LINUX_ROOT}/wbfm/code/wbfm/wbfm/scripts/0a-create_new_project.py with "
         f"parent_data_folder='{raw_linux}' "
         f"project_dir='{out_linux_parent}' "
-        f"experimenter='{experimenter}'"
+        f"experimenter='{experimenter}' "
+        f"{physical_unit_overrides}"
     )
     run_ssh_cmd(init_cmd)
     time.sleep(3)
@@ -276,6 +301,22 @@ def initialize_project(raw_dir: Path, output_parent_dir: Optional[Path] = None, 
         with open(smk_cfg, "w") as f:
             f.write(c)
         logger.info("Configured snakemake_config.yaml: SuperGlue + Barlow dual tracking [OK]")
+
+    if immobilized:
+        seg_cfg = project_dir / "1-segmentation" / "segment_config.yaml"
+        if seg_cfg.exists():
+            with open(seg_cfg, "r") as f:
+                c = f.read()
+            c = re.sub(
+                r"max_number_of_objects:\s*\d+.*",
+                "max_number_of_objects: 220 # Immobilized recordings that include the tail",
+                c,
+            )
+            with open(seg_cfg, "w") as f:
+                f.write(c)
+            logger.info("Configured segment_config.yaml: max_number_of_objects=220 (immobilized) [OK]")
+        else:
+            logger.warning(f"Expected segment_config.yaml not found at {seg_cfg}; max_number_of_objects NOT set to 220!")
 
     return project_dir, project_linux
 
@@ -357,7 +398,7 @@ echo "=== WBFM Pipeline Master Completed at $(date) ==="
 def check_status(project_dir: Path) -> Dict[str, Any]:
     """Check live status of the running pipeline."""
     flag = project_dir / "PIPELINE_COMPLETE.flag"
-    res = run_ssh_cmd("squeue -u $USER -o '%.10i %.14j %.8T %.10M %.8m %.4C %R' | grep -E 'wbfm_|smk_|auto_|alt_barl|stardist|tracking'")
+    res = run_ssh_cmd("squeue -u $USER -o '%.10i %.14j %.8T %.10M %.8m %.4C %R' | grep -E 'wbfm_|smk_|auto_|alt_barl|stardist|tracking' || true")
     active_jobs = [line.strip() for line in res.stdout.splitlines() if line.strip()]
 
     master_logs = list(project_dir.glob("snakemake/slurm_master_*.out"))
@@ -410,11 +451,11 @@ def verify_outputs(project_dir: Path) -> Dict[str, bool]:
     }
 
 
-def process_single_worm(worm_raw_dir: Path, output_parent: Optional[Path], experimenter: str) -> Dict[str, Any]:
+def process_single_worm(worm_raw_dir: Path, output_parent: Optional[Path], experimenter: str, immobilized: bool = False) -> Dict[str, Any]:
     """Process a single sanitized worm folder."""
     clean_raw = sanitize_raw_folder(worm_raw_dir)
     exp = worm_raw_dir.name if experimenter == "LeonK" else experimenter
-    proj_dir, proj_linux = initialize_project(clean_raw, output_parent, exp)
+    proj_dir, proj_linux = initialize_project(clean_raw, output_parent, exp, immobilized)
     job_id = submit_dual_pipeline(proj_dir, proj_linux)
     return {
         "raw": worm_raw_dir.name,
@@ -433,6 +474,7 @@ def main():
     p_go.add_argument("raw_folder", nargs="?", default=None, help="Raw data folder or batch directory (or auto-detect latest)")
     p_go.add_argument("--output-parent", default=None, help="Target parent directory for projects")
     p_go.add_argument("--experimenter", default="LeonK", help="Experimenter name")
+    p_go.add_argument("--immobilized", action="store_true", help="Immobilized recordings: raise segment_config.yaml max_number_of_objects to 220")
 
     # sanitize
     p_san = subparsers.add_parser("sanitize", help="Check and sanitize raw data folder")
@@ -470,7 +512,7 @@ def main():
         dispatched = []
         for w in worms:
             logger.info(f"\n---> Processing: {w.name}")
-            info = process_single_worm(w, out_parent, args.experimenter)
+            info = process_single_worm(w, out_parent, args.experimenter, args.immobilized)
             dispatched.append(info)
 
         logger.info("\n================================================================")
