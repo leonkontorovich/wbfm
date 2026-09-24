@@ -153,6 +153,8 @@ Target rule `traces` produces `4-traces/green_traces.h5`. The chain, with the du
 | `combine_tracking_and_tracklets` | `3b-match_tracklets_and_tracks_using_neuron_initialization.py` | `3-tracking/postprocessing/combined_3d_tracks.h5` | **~6 h** |
 | `extract_full_traces` | `4-make_final_traces.py` | `4-traces/red_traces.h5`, `green_traces.h5`, `.png` summaries | ~30 min |
 
+> **Re-running a later target on a finished project** (e.g. `RUNME.sh -s barlow_embedding` after `traces`): once masks exist, the `ruleorder` switches `segmentation` to `alt_segmentation`. Its different input set trips Snakemake's default rerun trigger, so segmentation runs again (hours) and overwrites `masks.zarr`. Pass `--rerun-triggers mtime`. The automated runner does this for you; see `docs/running_the_pipeline_zimmer_lab.md` § "Automated runner".
+
 Two tracker families exist. The default (`use_barlow_tracker: False` in `snakemake_config.yaml`) is the SuperGlue-based tracklet tracker used in the paper. Setting it true switches to [BarlowTrack](https://github.com/Zimmer-lab/barlow_track/) and requires `barlow_model_path` to point at a `resnet50.pth`. **The `trace_explorer` manual-correction GUI only works with tracklet-based tracking**, i.e. not with the Barlow default — `docs/running_the_pipeline.md` says this explicitly.
 
 End-to-end scale reference from the docs: a 3-minute video with ~5 neurons ≈ 10 minutes; an 8-minute video with ~150 neurons at TXYZ ≈ (1600×600×900×22) ≈ 8 hours *on the cluster*.

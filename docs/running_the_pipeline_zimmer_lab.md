@@ -80,3 +80,70 @@ Note that you should run this script from a directory where you have permission 
 Otherwise the log files will be created in the directory where you ran the script, which will crash silently due to permission errors.
 
 For more details on each step, see: [detailed pipeline steps](docs/detailed_pipeline_steps.md).
+
+
+## Automated runner from Windows (`wbsegmentation.py`)
+
+`wbsegmentation.py` (code in `automation/auto_pipeline.py`) does project creation and Slurm submission in one step
+from a Windows machine with the `Z:` share mounted and `ssh lisc` configured. It only orchestrates; all compute runs on the cluster.
+
+### Raw data layout
+
+One folder per worm inside a dated batch folder. The worm folder name becomes the project name
+(`<worm folder>-<acquisition date>`), so name it as you want the project to be called:
+
+```
+Lit_raw\24092026\
+  ZIM2165_Litworm1\
+    2026-09-24_10-37_ZIM2165_Litworm1_Ch0\   (NDTiff store: *.tif + NDTiff.index)
+    2026-09-24_10-37_ZIM2165_Litworm1_Ch1\
+    config.yaml                              (acquisition metadata, see below)
+```
+
+Microscope output lands as flat `_Ch0`/`_Ch1` sibling folders; move each pair into its worm folder before launching.
+Moves within the share are instant renames. To rename a worm, rename the worm folder and the `_Ch0`/`_Ch1` folders,
+but **never the `.tif` files**, because `NDTiff.index` refers to them by filename.
+
+`config.yaml` supplies the physical units forwarded to the project. If it is missing, a default is generated
+(22 planes, 1.5 um z-step, 20 ms exposure). Set `strain:` per condition (e.g. `ZIM2165_Lit` / `ZIM2165_Ctrl`); it feeds NWB export metadata.
+
+### Launch
+
+```commandline
+C:\Users\Zim_Admin\Miniforge3\envs\gui_only\python.exe -X utf8 wbsegmentation.py "Z:\...\Lit_raw\24092026" --output-parent "Z:\...\Lit_immob" --immobilized
+```
+
+`--immobilized` sets `max_number_of_objects: 220`. Status and deliverables: `wbsegmentation.py status|verify "<project_dir>"`.
+
+`0a-create_new_project.py` runs from the **cluster's** repo clone, so edits to the local `new_project_defaults/` do not
+reach new projects. Anything that must differ from the cluster template is patched per project by `initialize_project()`
+before submission: `snakemake_config.yaml` (tracker, Barlow model), `segment_config.yaml` (immobilized) and `RUNME.sh` (see below).
+
+After launch, check the [parameter checklist](#checklist-of-most-important-parameters-to-change-or-validate) for every project.
+In `project_config.yaml` the path values are written on the line *after* the key, so `grep -A1 red_fname`.
+
+### What the master job runs, and how long it takes
+
+Each worm gets one master job (`wbfm_<name>`, 2 CPU) that runs `RUNME.sh` (SuperGlue tracking up to traces) and then
+`RUNME.sh -s barlow_embedding` (embedding for ID transfer). It writes `PIPELINE_COMPLETE.flag` at the end.
+Observed per-worm timings (ZIM2165 immobilized, 18 min recordings, 2026-09):
+
+| Stage | Time |
+|---|---|
+| preprocessing | ~20 min |
+| segmentation | ~5.5 h |
+| build_frame_objects + match/tracking + tracklets | ~1-1.5 h |
+| combine_tracking_and_tracklets | 1-5 h (largest variance) |
+| extract_full_traces | ~10 min, so **traces are ready after ~9-13 h** |
+| barlow_embedding | ~50 min, so **fully complete after ~10-14 h** |
+
+#### *IMPORTANT*: the Barlow step must not re-run segmentation
+
+Once masks exist, `pipeline.smk` switches its `ruleorder` from `segmentation` to `alt_segmentation`. That rule has a
+different input set, which trips Snakemake's default `input` rerun trigger. The `barlow_embedding` call then
+re-segments the whole recording (about 6 h wasted) and **overwrites `masks.zarr` after the traces were extracted from it**.
+This happened in all projects launched before 2026-09-24.
+
+`initialize_project()` now adds `--rerun-triggers mtime` to `RUNME.sh` for the `barlow_embedding` target, and logs a warning if it cannot.
+To confirm on a running project: the master log's `[3/3]` section, or `snakemake/.snakemake/log/`, must **not** show `rule alt_segmentation`.
+If you create projects some other way and run `RUNME.sh -s barlow_embedding` yourself, add the same flag.

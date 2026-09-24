@@ -327,6 +327,30 @@ def initialize_project(raw_dir: Path, output_parent_dir: Optional[Path] = None, 
             f.write(c)
         logger.info("Configured snakemake_config.yaml: SuperGlue + Barlow dual tracking [OK]")
 
+    # The master job's final "RUNME.sh -s barlow_embedding" call otherwise re-runs the full segmentation:
+    # once masks exist, pipeline.smk's ruleorder switches segmentation -> alt_segmentation, whose smaller
+    # input set trips snakemake's default "input" rerun trigger (~6h wasted, and masks.zarr is overwritten
+    # after traces were already extracted from it). Restrict that call to mtime-based rerun decisions.
+    runme = project_dir / "snakemake" / "RUNME.sh"
+    if runme.exists():
+        with open(runme, "r", newline="") as f:
+            c = f.read()
+        if "--rerun-triggers mtime" not in c:
+            patch = (
+                'if [ "$RULE" = "barlow_embedding" ]; then\n'
+                '    SNAKEMAKE_OPT="$SNAKEMAKE_OPT --rerun-triggers mtime"\n'
+                'fi\n'
+            )
+            c, n = re.subn(r"^(NUM_JOBS_TO_SUBMIT=.*\n)", lambda m: m.group(1) + patch, c, count=1, flags=re.MULTILINE)
+            if n:
+                with open(runme, "w", newline="") as f:
+                    f.write(c)
+                logger.info("Configured RUNME.sh: barlow_embedding uses --rerun-triggers mtime (no re-segmentation) [OK]")
+            else:
+                logger.warning(f"Could not patch {runme}; barlow_embedding will re-run segmentation!")
+    else:
+        logger.warning(f"Expected RUNME.sh not found at {runme}; barlow_embedding will re-run segmentation!")
+
     if immobilized:
         seg_cfg = project_dir / "1-segmentation" / "segment_config.yaml"
         if seg_cfg.exists():
