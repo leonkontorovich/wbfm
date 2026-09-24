@@ -110,10 +110,12 @@ but **never the `.tif` files**, because `NDTiff.index` refers to them by filenam
 ### Launch
 
 ```commandline
-C:\Users\Zim_Admin\Miniforge3\envs\gui_only\python.exe -X utf8 wbsegmentation.py "Z:\...\Lit_raw\24092026" --output-parent "Z:\...\Lit_immob" --immobilized
+wbsegmentation.bat "Z:\...\Lit_raw\24092026" --output-parent "Z:\...\Lit_immob" --immobilized
 ```
 
-`--immobilized` sets `max_number_of_objects: 220`. Status and deliverables: `wbsegmentation.py status|verify "<project_dir>"`.
+`--immobilized` sets `max_number_of_objects: 220`. Status and deliverables: `wbsegmentation.bat status|verify "<project_dir>"`.
+`wbsegmentation.bat` runs `wbsegmentation.py` with the `gui_only` env Python. `launcher_settings.bat` sets where that env
+lives. To override it on one machine, use a gitignored `launcher_settings.local.bat`.
 
 `0a-create_new_project.py` runs from the **cluster's** repo clone, so edits to the local `new_project_defaults/` do not
 reach new projects. Anything that must differ from the cluster template is patched per project by `initialize_project()`

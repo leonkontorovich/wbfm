@@ -1,2 +1,4 @@
 @echo off
-"C:\Users\Zim_Admin\Miniforge3\envs\gui_only\python.exe" -X utf8 "C:\GithubRepositories\wbfm\go.py" %*
+SETLOCAL
+CALL "%~dp0launcher_settings.bat"
+"%WBFM_PYTHON%" -X utf8 "%WBFM_ROOT%\go.py" %*

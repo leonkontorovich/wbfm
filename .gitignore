@@ -74,7 +74,6 @@ wbfm/notebooks/*.ipynb
 docs/images/workflow_diagrams.pdf
 docs/workflow_diagrams-Tracking_workflow_version2.pdf
 docs/computational_methods_section.drawio
-.gitignore
 
 # Agent & local environment artifacts
 venv_gui/
@@ -85,6 +84,8 @@ envs/
 .gemini/
 .claudeignore
 .recent_projects.json
+launcher_settings.local.bat
+launch_litworm4.bat
 
 # Personal, machine-specific notes and agent guides (kept local, not for upstream PRs)
 notes/
