@@ -577,9 +577,13 @@ class ProjectData:
 
         See: check_for_unmatched_tracklets
         """
+        if not self.has_tracklets():
+            self.logger.debug("Skipping desynchronization check: no tracklets found in project")
+            return {}
         self.logger.info("Checking for database desynchronization")
         unmatched_tracklets = check_for_unmatched_tracklets(self.df_all_tracklets, self.global2tracklet,
                                                             raise_error=raise_error)
+        return unmatched_tracklets
 
     @staticmethod
     def unpack_config_file(project_path: Union[str, ModularProjectConfig]):

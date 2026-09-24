@@ -241,14 +241,17 @@ class NapariPropertyHeatMapper:
         val_to_plot = list((self.mean_green / self.mean_red).std())
         return property_vector_to_colormap(val_to_plot, self.vec_of_labels, scale_to_minus_1_and_1=False)
 
-    def custom_val_to_plot(self, val_to_plot, scale_to_minus_1_and_1):
+    def custom_val_to_plot(self, val_to_plot, scale_to_minus_1_and_1=True, cmap=None, **kwargs):
         if hasattr(val_to_plot, 'reindex') and self.names is not None:
             # If it's a pandas Series, we MUST reindex to match self.names order 
             # otherwise zip(vec_of_labels, val_to_plot) randomly mismatches neurons!
             val_to_plot = val_to_plot.reindex(self.names)
             
-        prop_dict = property_vector_to_colormap(val_to_plot, self.vec_of_labels,
-                                                scale_to_minus_1_and_1=scale_to_minus_1_and_1)
+        colormap_kwargs = dict(scale_to_minus_1_and_1=scale_to_minus_1_and_1)
+        if cmap is not None:
+            colormap_kwargs['cmap'] = cmap
+        colormap_kwargs.update(kwargs)
+        prop_dict = property_vector_to_colormap(val_to_plot, self.vec_of_labels, **colormap_kwargs)
         return prop_dict
 
 
