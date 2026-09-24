@@ -257,6 +257,65 @@ QPushButton#quickGlanceButton:disabled {
 """
 
 # ==============================================================================
+# Canonical Path & File Fingerprinting
+# ==============================================================================
+
+def canonical_path(p: Optional[str]) -> str:
+    """
+    Returns a normalized, canonical absolute path representation.
+    Ensures consistent forward/backslash handling, drive letter casing on Windows,
+    and trailing slash stripping so paths compare identically in sets and dicts.
+    """
+    if not p:
+        return ""
+    norm = os.path.normpath(os.path.abspath(p))
+    if len(norm) >= 2 and norm[1] == ":" and norm[0].isalpha():
+        norm = norm[0].upper() + norm[1:]
+    return norm
+
+
+def get_project_fingerprint(project_dir: str) -> str:
+    """
+    Computes a composite fingerprint based on modification times and sizes of sentinel files.
+    Fast check (a few stat calls) to detect when any pipeline step completes or manual annotations change.
+    """
+    parts = []
+    norm_dir = canonical_path(project_dir)
+    try:
+        st = os.stat(norm_dir)
+        parts.append(f"{st.st_mtime_ns}:{st.st_size}")
+    except Exception:
+        parts.append("0:0")
+
+    sentinels = [
+        "project_config.yaml",
+        os.path.join("1-segmentation", "masks.zarr"),
+        os.path.join("1-segmentation", "metadata.pickle"),
+        os.path.join("3-tracking", "postprocessing", "combined_3d_tracks.h5"),
+        os.path.join("4-traces", "green_traces.h5"),
+        os.path.join("3-tracking", "barlow_tracker", "worm_tracker_barlow.pickle"),
+        os.path.join("3-tracking", "manual_annotation", "manual_annotation.xlsx"),
+        os.path.join("3-tracking", "manual_annotation", "manual_annotation.h5"),
+        os.path.join("3-tracking", "manual_annotation", "manual_annotation_iterative.xlsx"),
+        os.path.join("3-tracking", "manual_annotation", "manual_annotation_hungarian.xlsx"),
+        os.path.join("3-tracking", "id_transfer_output", "hungarian", "manual_annotation.xlsx"),
+        os.path.join("3-tracking", "hungarian", "manual_annotation.xlsx"),
+        "manual_annotation.xlsx",
+    ]
+
+    for rel_path in sentinels:
+        full_path = os.path.join(norm_dir, rel_path)
+        try:
+            st = os.stat(full_path)
+            parts.append(f"{rel_path}:{st.st_mtime_ns}:{st.st_size}")
+        except Exception:
+            parts.append(f"{rel_path}:0:0")
+
+    import hashlib
+    return hashlib.md5(";".join(parts).encode("utf-8")).hexdigest()
+
+
+# ==============================================================================
 # History & Directory Persistence
 # ==============================================================================
 
@@ -268,11 +327,17 @@ def load_history() -> List[str]:
                 data = json.load(f)
             if isinstance(data, list):
                 paths = []
+                seen = set()
                 for item in data:
+                    raw_path = ""
                     if isinstance(item, str):
-                        paths.append(item)
+                        raw_path = item
                     elif isinstance(item, dict) and "path" in item:
-                        paths.append(item["path"])
+                        raw_path = item["path"]
+                    canon = canonical_path(raw_path)
+                    if canon and canon not in seen:
+                        seen.add(canon)
+                        paths.append(raw_path)
                 return paths
         except Exception:
             pass
@@ -280,18 +345,27 @@ def load_history() -> List[str]:
 
 
 def load_history_entries() -> List[Dict[str, Any]]:
-    """Loads recent projects with timestamps and metadata."""
+    """Loads recent projects with timestamps and metadata, deduplicated by canonical path."""
     if os.path.exists(HISTORY_FILE):
         try:
             with open(HISTORY_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, list):
                 entries = []
+                seen = set()
                 for item in data:
+                    raw_path = ""
+                    entry = {}
                     if isinstance(item, str):
-                        entries.append({"path": item, "timestamp": None})
+                        raw_path = item
+                        entry = {"path": item, "timestamp": None}
                     elif isinstance(item, dict) and "path" in item:
-                        entries.append(item)
+                        raw_path = item["path"]
+                        entry = dict(item)
+                    canon = canonical_path(raw_path)
+                    if canon and canon not in seen:
+                        seen.add(canon)
+                        entries.append(entry)
                 return entries
         except Exception:
             pass
@@ -299,13 +373,13 @@ def load_history_entries() -> List[Dict[str, Any]]:
 
 
 def save_history(project_path: str):
-    """Saves project path to history with ISO timestamp."""
+    """Saves project path to history with ISO timestamp, deduplicated by canonical path."""
     entries = load_history_entries()
-    norm = os.path.normpath(project_path)
-    entries = [e for e in entries if os.path.normpath(e.get("path", "")) != norm]
+    norm = canonical_path(project_path)
+    entries = [e for e in entries if canonical_path(e.get("path", "")) != norm]
     new_entry = {
         "path": project_path,
-        "name": os.path.basename(os.path.dirname(project_path)) if project_path.endswith(".yaml") else os.path.basename(project_path),
+        "name": os.path.basename(os.path.dirname(norm)) if norm.lower().endswith(".yaml") else os.path.basename(norm),
         "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     entries.insert(0, new_entry)
@@ -317,35 +391,50 @@ def save_history(project_path: str):
 
 
 def load_custom_roots() -> List[str]:
-    """Loads user-added custom search roots."""
+    """Loads user-added custom search roots, deduplicated by canonical path."""
     if os.path.exists(CUSTOM_ROOTS_FILE):
         try:
             with open(CUSTOM_ROOTS_FILE, "r", encoding="utf-8") as f:
                 roots = json.load(f)
                 if isinstance(roots, list):
-                    return [r for r in roots if isinstance(r, str)]
+                    seen = set()
+                    cleaned = []
+                    for r in roots:
+                        if isinstance(r, str):
+                            cr = canonical_path(r)
+                            if cr and cr not in seen:
+                                seen.add(cr)
+                                cleaned.append(r)
+                    return cleaned
         except Exception:
             pass
     return []
 
 
 def save_custom_roots(roots: List[str]):
-    """Saves user-added custom search roots."""
+    """Saves user-added custom search roots, deduplicated by canonical path."""
     try:
+        seen = set()
+        cleaned = []
+        for r in roots:
+            cr = canonical_path(r)
+            if cr and cr not in seen:
+                seen.add(cr)
+                cleaned.append(r)
         with open(CUSTOM_ROOTS_FILE, "w", encoding="utf-8") as f:
-            json.dump(roots, f, indent=2)
+            json.dump(cleaned, f, indent=2)
     except Exception as e:
         logging.warning(f"Could not save custom roots: {e}")
 
 
 def load_metadata_cache() -> Dict[str, Any]:
-    """Loads cached project metadata with mtime keys and schema validation."""
+    """Loads cached project metadata with fingerprints and schema validation."""
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict):
-                    # Filter out stale cache entries from previous schema versions
+                    # Filter out stale cache entries from previous schema versions and deduplicate keys
                     cleaned = {}
                     for k, v in data.items():
                         if (
@@ -355,7 +444,11 @@ def load_metadata_cache() -> Dict[str, Any]:
                             and "annotated_names" in v["metadata"]
                             and "annotated_details" in v["metadata"]
                         ):
-                            cleaned[k] = v
+                            canon_k = canonical_path(k)
+                            v["metadata"]["path"] = canonical_path(v["metadata"].get("path", canon_k))
+                            if "config_path" in v["metadata"]:
+                                v["metadata"]["config_path"] = canonical_path(v["metadata"]["config_path"])
+                            cleaned[canon_k] = v
                     return cleaned
         except Exception:
             pass
@@ -363,12 +456,16 @@ def load_metadata_cache() -> Dict[str, Any]:
 
 
 def save_metadata_cache(cache: Dict[str, Any]):
-    """Saves project metadata cache to file."""
+    """Saves project metadata cache to file with canonicalized keys."""
     try:
+        cleaned = {}
+        for k, v in cache.items():
+            cleaned[canonical_path(k)] = v
         with open(CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(cache, f, indent=2)
+            json.dump(cleaned, f, indent=2)
     except Exception as e:
         logging.warning(f"Could not save metadata cache: {e}")
+
 
 
 # ==============================================================================
@@ -379,26 +476,32 @@ def extract_metadata_for_project(project_dir: str, cache: Optional[Dict[str, Any
     """
     Safely inspects a project directory and extracts status badges, neuron counts,
     volume counts, and annotated neuron identities without loading large arrays into memory.
-    Leverages mtime-checked local caching for near-instant execution.
+    Leverages composite sentinel fingerprint and mtime-checked local caching for near-instant execution.
     """
+    project_dir = canonical_path(project_dir)
+    current_fp = get_project_fingerprint(project_dir)
     try:
         current_mtime = os.path.getmtime(project_dir)
     except Exception:
         current_mtime = 0
 
-    # Return cached record if mtime hasn't changed and required schema keys exist
+    # Return cached record if fingerprint matches and required schema keys exist
     if cache is not None and project_dir in cache:
         cached = cache[project_dir]
+        cached_fp = cached.get("fingerprint")
         if (
-            cached.get("mtime") == current_mtime
+            (cached_fp == current_fp if cached_fp else cached.get("mtime") == current_mtime)
             and "metadata" in cached
             and isinstance(cached["metadata"], dict)
             and "annotated_names" in cached["metadata"]
             and "annotated_details" in cached["metadata"]
         ):
+            cached["metadata"]["path"] = canonical_path(cached["metadata"].get("path", project_dir))
+            if "config_path" in cached["metadata"]:
+                cached["metadata"]["config_path"] = canonical_path(cached["metadata"]["config_path"])
             return cached["metadata"]
 
-    cfg_candidate = os.path.join(project_dir, "project_config.yaml")
+    cfg_candidate = canonical_path(os.path.join(project_dir, "project_config.yaml"))
     name = os.path.basename(project_dir)
     meta = {
         "name": name,
@@ -474,6 +577,8 @@ def extract_metadata_for_project(project_dir: str, cache: Optional[Dict[str, Any
                     grp = f["df_with_missing"]
                     if "block0_items_level0" in grp:
                         meta["tracked_count"] = len(grp["block0_items_level0"])
+                    elif "axis0" in grp:
+                        meta["tracked_count"] = len(grp["axis0"])
                     if "axis1" in grp:
                         meta["num_volumes"] = len(grp["axis1"])
         elif meta["has_traces"]:
@@ -482,6 +587,8 @@ def extract_metadata_for_project(project_dir: str, cache: Optional[Dict[str, Any
                     grp = f["df_with_missing"]
                     if "block0_items_level0" in grp:
                         meta["tracked_count"] = len(grp["block0_items_level0"])
+                    elif "axis0" in grp:
+                        meta["tracked_count"] = len(grp["axis0"])
                     if "axis1" in grp:
                         meta["num_volumes"] = len(grp["axis1"])
     except Exception:
@@ -489,8 +596,8 @@ def extract_metadata_for_project(project_dir: str, cache: Optional[Dict[str, Any
 
     # ID'd Neurons Count & Annotated Identities
     ann_candidates = [
-        os.path.join(project_dir, "3-tracking", "manual_annotation", "manual_annotation.h5"),
         os.path.join(project_dir, "3-tracking", "manual_annotation", "manual_annotation.xlsx"),
+        os.path.join(project_dir, "3-tracking", "manual_annotation", "manual_annotation.h5"),
         os.path.join(project_dir, "3-tracking", "manual_annotation", "manual_annotation_iterative.xlsx"),
         os.path.join(project_dir, "3-tracking", "manual_annotation", "manual_annotation_hungarian.xlsx"),
         os.path.join(project_dir, "3-tracking", "id_transfer_output", "hungarian", "manual_annotation.xlsx"),
@@ -500,14 +607,17 @@ def extract_metadata_for_project(project_dir: str, cache: Optional[Dict[str, Any
 
     for cand in ann_candidates:
         if cand.endswith(".xlsx") and os.path.exists(cand):
-            meta["excel_path"] = cand
+            meta["excel_path"] = canonical_path(cand)
             break
 
+    existing_cands = [cand for cand in ann_candidates if os.path.exists(cand)]
     ann_target = None
-    for cand in ann_candidates:
-        if os.path.exists(cand):
-            ann_target = cand
-            break
+    if existing_cands:
+        try:
+            existing_cands.sort(key=lambda c: os.path.getmtime(c), reverse=True)
+        except Exception:
+            pass
+        ann_target = existing_cands[0]
 
     if ann_target:
         try:
@@ -540,11 +650,11 @@ def extract_metadata_for_project(project_dir: str, cache: Optional[Dict[str, Any
             if df is not None and not df.empty:
                 meta["annotated_total"] = len(df)
                 cols = {str(c).strip().lower(): c for c in df.columns}
-                id1_col = cols.get("id1") or cols.get("primary id")
-                id2_col = cols.get("id2") or cols.get("alternative id")
+                id1_col = cols.get("id1") or cols.get("primary id") or cols.get("id 1")
+                id2_col = cols.get("id2") or cols.get("alternative id") or cols.get("id 2")
                 nid_col = cols.get("neuron id") or cols.get("neuron_id") or cols.get("track id") or cols.get("neuron")
                 conf_col = cols.get("certainty") or cols.get("confidence") or cols.get("status")
-                notes_col = cols.get("notes") or cols.get("comment")
+                notes_col = cols.get("notes") or cols.get("comment") or cols.get("comments")
 
                 annotated_names_set = set()
                 annotated_details = []
@@ -624,7 +734,7 @@ def extract_metadata_for_project(project_dir: str, cache: Optional[Dict[str, Any
 
     # Update cache
     if cache is not None:
-        cache[project_dir] = {"mtime": current_mtime, "metadata": meta}
+        cache[project_dir] = {"mtime": current_mtime, "fingerprint": current_fp, "metadata": meta}
 
     return meta
 
@@ -659,16 +769,30 @@ class RecordingScannerWorker(QThread):
         discovered_paths = set()
         projects_to_inspect = []
 
-        # 1. First, yield recent paths immediately
+        # Prepare deduplicated canonical recent paths
+        norm_recent_paths = []
         for p in self.recent_paths:
+            if not p:
+                continue
+            cp = canonical_path(p)
+            if cp and cp not in norm_recent_paths:
+                norm_recent_paths.append(cp)
+
+        # 1. First, yield recent paths immediately
+        for p in norm_recent_paths:
             if self._is_stopped or self.isInterruptionRequested():
                 return
-            p_dir = os.path.dirname(p) if p.endswith(".yaml") else p
+            p_dir = canonical_path(os.path.dirname(p) if p.lower().endswith(".yaml") else p)
+            if not p_dir or not os.path.exists(p_dir):
+                continue
             if p_dir not in discovered_paths:
                 discovered_paths.add(p_dir)
                 name = os.path.basename(p_dir)
                 date_m = re.search(r"(\d{4}-\d{2}-\d{2})", name)
                 date_str = date_m.group(1) if date_m else ""
+
+                strain_m = re.search(r"(AX\d+|ZIM\d+|N2)", name, re.IGNORECASE)
+                strain_str = strain_m.group(1).upper() if strain_m else (name.split("-")[0].split("_")[0] if name else "")
 
                 # If in cache, yield cached right away
                 if (
@@ -684,9 +808,9 @@ class RecordingScannerWorker(QThread):
                     placeholder = {
                         "name": name,
                         "path": p_dir,
-                        "config_path": p if p.endswith(".yaml") else os.path.join(p_dir, "project_config.yaml"),
+                        "config_path": p if p.lower().endswith(".yaml") else canonical_path(os.path.join(p_dir, "project_config.yaml")),
                         "date": date_str,
-                        "strain": "",
+                        "strain": strain_str,
                         "num_volumes": None,
                         "has_masks": False,
                         "has_tracks": False,
@@ -704,8 +828,14 @@ class RecordingScannerWorker(QThread):
                     self.recording_discovered.emit(placeholder)
                 projects_to_inspect.append(p_dir)
 
-        # 2. Discover project directories in search roots (shallow check, max depth 2)
-        for root in self.search_roots:
+        # 2. Discover project directories in search roots (deduplicated)
+        norm_roots = []
+        for r in self.search_roots:
+            cr = canonical_path(r)
+            if cr and cr not in norm_roots:
+                norm_roots.append(cr)
+
+        for root in norm_roots:
             if self._is_stopped or self.isInterruptionRequested():
                 return
             self.scan_progress.emit(f"Scanning {os.path.basename(root)}...", len(projects_to_inspect), 0)
@@ -720,29 +850,46 @@ class RecordingScannerWorker(QThread):
             cfg_file = os.path.join(root, "project_config.yaml")
             try:
                 if os.path.exists(cfg_file):
-                    if root not in discovered_paths:
-                        discovered_paths.add(root)
-                        projects_to_inspect.append(root)
-                        self.recording_discovered.emit({
-                            "name": os.path.basename(root),
-                            "path": root,
-                            "config_path": cfg_file,
-                            "date": "",
-                            "strain": "",
-                            "num_volumes": None,
-                            "has_masks": False,
-                            "has_tracks": False,
-                            "has_traces": False,
-                            "has_barlow": False,
-                            "tracked_count": None,
-                            "annotated_count": 0,
-                            "annotated_total": 0,
-                            "annotated_names": [],
-                            "annotated_details": [],
-                            "is_fully_processed": False,
-                            "missing_annotations": False,
-                            "is_recent": False,
-                        })
+                    root_canon = canonical_path(root)
+                    if root_canon not in discovered_paths:
+                        discovered_paths.add(root_canon)
+                        projects_to_inspect.append(root_canon)
+
+                        name = os.path.basename(root_canon)
+                        date_m = re.search(r"(\d{4}-\d{2}-\d{2})", name)
+                        date_str = date_m.group(1) if date_m else ""
+
+                        strain_m = re.search(r"(AX\d+|ZIM\d+|N2)", name, re.IGNORECASE)
+                        strain_str = strain_m.group(1).upper() if strain_m else (name.split("-")[0].split("_")[0] if name else "")
+
+                        if (
+                            not self.bypass_cache
+                            and root_canon in self.cache
+                            and "metadata" in self.cache[root_canon]
+                            and "annotated_names" in self.cache[root_canon]["metadata"]
+                        ):
+                            self.recording_discovered.emit(self.cache[root_canon]["metadata"])
+                        else:
+                            self.recording_discovered.emit({
+                                "name": name,
+                                "path": root_canon,
+                                "config_path": canonical_path(cfg_file),
+                                "date": date_str,
+                                "strain": strain_str,
+                                "num_volumes": None,
+                                "has_masks": False,
+                                "has_tracks": False,
+                                "has_traces": False,
+                                "has_barlow": False,
+                                "tracked_count": None,
+                                "annotated_count": 0,
+                                "annotated_total": 0,
+                                "annotated_names": [],
+                                "annotated_details": [],
+                                "is_fully_processed": False,
+                                "missing_annotations": False,
+                                "is_recent": False,
+                            })
                     continue
             except Exception:
                 pass
@@ -757,64 +904,69 @@ class RecordingScannerWorker(QThread):
             for sub in subdirs:
                 if self._is_stopped or self.isInterruptionRequested():
                     return
-                full_sub = os.path.join(root, sub)
+                full_sub = canonical_path(os.path.join(root, sub))
                 try:
+                    if full_sub in discovered_paths:
+                        continue
                     if not os.path.isdir(full_sub):
                         continue
                     cfg_candidate = os.path.join(full_sub, "project_config.yaml")
                     if os.path.exists(cfg_candidate):
-                        if full_sub not in discovered_paths:
-                            discovered_paths.add(full_sub)
-                            projects_to_inspect.append(full_sub)
+                        discovered_paths.add(full_sub)
+                        projects_to_inspect.append(full_sub)
 
-                            # If in cache, emit cached info immediately
-                            if (
-                                not self.bypass_cache
-                                and full_sub in self.cache
-                                and "metadata" in self.cache[full_sub]
-                                and "annotated_names" in self.cache[full_sub]["metadata"]
-                            ):
-                                self.recording_discovered.emit(self.cache[full_sub]["metadata"])
-                            else:
-                                name = sub
-                                date_m = re.search(r"(\d{4}-\d{2}-\d{2})", name)
-                                date_str = date_m.group(1) if date_m else ""
-                                self.recording_discovered.emit({
-                                    "name": name,
-                                    "path": full_sub,
-                                    "config_path": cfg_candidate,
-                                    "date": date_str,
-                                    "strain": "",
-                                    "num_volumes": None,
-                                    "has_masks": False,
-                                    "has_tracks": False,
-                                    "has_traces": False,
-                                    "has_barlow": False,
-                                    "tracked_count": None,
-                                    "annotated_count": 0,
-                                    "annotated_total": 0,
-                                    "annotated_names": [],
-                                    "annotated_details": [],
-                                    "is_fully_processed": False,
-                                    "missing_annotations": False,
-                                    "is_recent": False,
-                                })
+                        name = sub
+                        date_m = re.search(r"(\d{4}-\d{2}-\d{2})", name)
+                        date_str = date_m.group(1) if date_m else ""
+
+                        strain_m = re.search(r"(AX\d+|ZIM\d+|N2)", name, re.IGNORECASE)
+                        strain_str = strain_m.group(1).upper() if strain_m else (name.split("-")[0].split("_")[0] if name else "")
+
+                        # If in cache, emit cached info immediately
+                        if (
+                            not self.bypass_cache
+                            and full_sub in self.cache
+                            and "metadata" in self.cache[full_sub]
+                            and "annotated_names" in self.cache[full_sub]["metadata"]
+                        ):
+                            self.recording_discovered.emit(self.cache[full_sub]["metadata"])
+                        else:
+                            self.recording_discovered.emit({
+                                "name": name,
+                                "path": full_sub,
+                                "config_path": canonical_path(cfg_candidate),
+                                "date": date_str,
+                                "strain": strain_str,
+                                "num_volumes": None,
+                                "has_masks": False,
+                                "has_tracks": False,
+                                "has_traces": False,
+                                "has_barlow": False,
+                                "tracked_count": None,
+                                "annotated_count": 0,
+                                "annotated_total": 0,
+                                "annotated_names": [],
+                                "annotated_details": [],
+                                "is_fully_processed": False,
+                                "missing_annotations": False,
+                                "is_recent": False,
+                            })
                 except Exception:
                     pass
 
         # 3. Deep metadata inspection for each project
         total = len(projects_to_inspect)
+        recent_cfg_set = {p for p in norm_recent_paths}
+        recent_dir_set = {canonical_path(os.path.dirname(p) if p.lower().endswith(".yaml") else p) for p in norm_recent_paths}
+
         for idx, project_dir in enumerate(projects_to_inspect, start=1):
             if self._is_stopped or self.isInterruptionRequested():
                 return
             self.scan_progress.emit(f"Inspecting {os.path.basename(project_dir)}...", idx, total)
             try:
                 meta = extract_metadata_for_project(project_dir, cache=self.cache)
-                norm_p = os.path.normpath(meta["config_path"])
-                meta["is_recent"] = any(
-                    os.path.normpath(r) == norm_p or os.path.normpath(os.path.dirname(r)) == os.path.normpath(project_dir)
-                    for r in self.recent_paths
-                )
+                norm_p = canonical_path(meta["config_path"])
+                meta["is_recent"] = (norm_p in recent_cfg_set) or (project_dir in recent_dir_set)
                 self.recording_updated.emit(meta)
             except Exception as e:
                 logging.debug(f"Error inspecting {project_dir}: {e}")
@@ -1255,18 +1407,20 @@ class WBFMRecordingDashboard(QDialog):
         self.load_tracklets: bool = saved_tracklets
 
         # Search roots
-        self.search_roots = list(DEFAULT_SEARCH_ROOTS)
+        self.search_roots = [canonical_path(r) for r in DEFAULT_SEARCH_ROOTS]
         for cr in load_custom_roots():
-            if cr not in self.search_roots:
-                self.search_roots.append(cr)
+            cr_norm = canonical_path(cr)
+            if cr_norm and cr_norm not in self.search_roots:
+                self.search_roots.append(cr_norm)
 
         # Recent projects
-        self.recent_paths = load_history()
+        self.recent_paths = [canonical_path(p) for p in load_history()]
 
         # Add parent directories of recent projects as candidate roots
         for rp in self.recent_paths:
             try:
-                parent_dir = os.path.dirname(os.path.dirname(rp))
+                p_dir = canonical_path(os.path.dirname(rp) if rp.lower().endswith(".yaml") else rp)
+                parent_dir = canonical_path(os.path.dirname(p_dir))
                 if os.path.exists(parent_dir) and parent_dir not in self.search_roots:
                     self.search_roots.append(parent_dir)
             except Exception:
@@ -1750,12 +1904,51 @@ class WBFMRecordingDashboard(QDialog):
         self.scanner_thread.start()
 
     def stop_scanner(self):
-        if hasattr(self, "scanner_thread") and self.scanner_thread.isRunning():
-            self.scanner_thread.stop()
-            self.scanner_thread.wait(2000)
+        if hasattr(self, "scanner_thread") and self.scanner_thread is not None:
+            if self.scanner_thread.isRunning():
+                self.scanner_thread.stop()
+                try:
+                    self.scanner_thread.recording_discovered.disconnect()
+                    self.scanner_thread.recording_updated.disconnect()
+                    self.scanner_thread.scan_progress.disconnect()
+                    self.scanner_thread.scan_finished.disconnect()
+                except Exception:
+                    pass
+                self.scanner_thread.wait(2000)
 
     def _restart_scanner(self):
         self.stop_scanner()
+
+        prev_selection = self.selected_project_path
+
+        # Clear UI table and state
+        self.table.setRowCount(0)
+        self.records_by_path.clear()
+        self.row_by_path.clear()
+        self.detected_strains.clear()
+        self._rebuild_strain_chips()
+        self.btn_launch.setEnabled(False)
+        self._update_inspector(None)
+
+        # Reload recent paths and search roots fresh
+        self.recent_paths = [canonical_path(p) for p in load_history()]
+        self.search_roots = [canonical_path(r) for r in DEFAULT_SEARCH_ROOTS]
+        for cr in load_custom_roots():
+            cr_norm = canonical_path(cr)
+            if cr_norm and cr_norm not in self.search_roots:
+                self.search_roots.append(cr_norm)
+        for rp in self.recent_paths:
+            try:
+                p_dir = canonical_path(os.path.dirname(rp) if rp.lower().endswith(".yaml") else rp)
+                parent_dir = canonical_path(os.path.dirname(p_dir))
+                if os.path.exists(parent_dir) and parent_dir not in self.search_roots:
+                    self.search_roots.append(parent_dir)
+            except Exception:
+                pass
+
+        if prev_selection:
+            self.selected_project_path = canonical_path(prev_selection)
+
         self._start_scanner(bypass_cache=True)
 
     def _save_settings(self):
@@ -1788,7 +1981,11 @@ class WBFMRecordingDashboard(QDialog):
 
     @Slot(dict)
     def _on_recording_discovered(self, record: dict):
-        path = record["path"]
+        path = canonical_path(record.get("path"))
+        record["path"] = path
+        if "config_path" in record:
+            record["config_path"] = canonical_path(record["config_path"])
+
         if path in self.records_by_path:
             return
 
@@ -1806,16 +2003,27 @@ class WBFMRecordingDashboard(QDialog):
         self.row_by_path[path] = row
 
         self._populate_row(row, record)
+        self._apply_row_filter(row)
 
         self.table.setSortingEnabled(sorting)
         self._update_counts()
 
-        if self.table.rowCount() == 1 and not self.selected_project_path:
+        if self.selected_project_path and canonical_path(self.selected_project_path) in (
+            path, canonical_path(record.get("config_path", ""))
+        ):
+            self.table.selectRow(row)
+            self.btn_launch.setEnabled(True)
+            self._update_inspector(record)
+        elif self.table.rowCount() == 1 and not self.selected_project_path:
             self.table.selectRow(0)
 
     @Slot(dict)
     def _on_recording_updated(self, record: dict):
-        path = record["path"]
+        path = canonical_path(record.get("path"))
+        record["path"] = path
+        if "config_path" in record:
+            record["config_path"] = canonical_path(record["config_path"])
+
         self.records_by_path[path] = record
         strain = record.get("strain")
         if strain and strain not in self.detected_strains:
@@ -1825,7 +2033,7 @@ class WBFMRecordingDashboard(QDialog):
         target_row = -1
         for r in range(self.table.rowCount()):
             item = self.table.item(r, 0)
-            if item and item.data(Qt.UserRole) == path:
+            if item and canonical_path(item.data(Qt.UserRole)) == path:
                 target_row = r
                 break
 
@@ -1833,16 +2041,16 @@ class WBFMRecordingDashboard(QDialog):
             sorting = self.table.isSortingEnabled()
             self.table.setSortingEnabled(False)
             self._populate_row(target_row, record)
+            self._apply_row_filter(target_row)
             self.table.setSortingEnabled(sorting)
         else:
             self._on_recording_discovered(record)
 
-        self._apply_row_filter(target_row if target_row >= 0 else self.table.rowCount() - 1)
         self._update_counts()
 
         # Update inspector if this is selected
-        if self.selected_project_path and os.path.normpath(self.selected_project_path) in (
-            os.path.normpath(path), os.path.normpath(record.get("config_path", ""))
+        if self.selected_project_path and canonical_path(self.selected_project_path) in (
+            path, canonical_path(record.get("config_path", ""))
         ):
             self._update_inspector(record)
 
@@ -1856,9 +2064,15 @@ class WBFMRecordingDashboard(QDialog):
 
     @Slot()
     def _on_scan_finished(self):
-        self.lbl_status.setText(f"Scan complete — {len(self.records_by_path)} recordings loaded")
+        count = len(self.records_by_path)
+        self.lbl_status.setText(f"Scan complete — {count} recordings loaded")
         self.progress_bar.setVisible(False)
         self._update_counts()
+        if not self.selected_project_path and self.table.rowCount() > 0:
+            for r in range(self.table.rowCount()):
+                if not self.table.isRowHidden(r):
+                    self.table.selectRow(r)
+                    break
 
     # --------------------------------------------------------------------------
     # Table Population & Rendering
@@ -1867,11 +2081,17 @@ class WBFMRecordingDashboard(QDialog):
     def _populate_row(self, row: int, rec: dict):
         # Col 0: Recording Name
         name_item = SortableTableWidgetItem(rec.get("name", ""), sort_key=rec.get("name", "").lower())
-        name_item.setData(Qt.UserRole, rec["path"])
+        canon_path = canonical_path(rec.get("path", ""))
+        name_item.setData(Qt.UserRole, canon_path)
         name_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
         name_item.setForeground(QColor("#e5c07b" if rec.get("is_recent") else "#ffffff"))
+        tip_parts = [rec.get("name", "")]
         if rec.get("is_recent"):
-            name_item.setToolTip("Recent")
+            tip_parts.append("(Recent Project)")
+        tip_parts.append(f"Directory: {canon_path}")
+        if rec.get("config_path"):
+            tip_parts.append(f"Config: {canonical_path(rec['config_path'])}")
+        name_item.setToolTip("\n".join(tip_parts))
         self.table.setItem(row, 0, name_item)
 
         # Col 1: Date
@@ -1945,7 +2165,7 @@ class WBFMRecordingDashboard(QDialog):
         item0 = self.table.item(row, 0)
         if not item0:
             return
-        path = item0.data(Qt.UserRole)
+        path = canonical_path(item0.data(Qt.UserRole))
         rec = self.records_by_path.get(path, {})
         query = self.search_input.text().strip().lower()
 
@@ -2269,9 +2489,9 @@ class WBFMRecordingDashboard(QDialog):
         row = selected_rows[0].row()
         item0 = self.table.item(row, 0)
         if item0:
-            path = item0.data(Qt.UserRole)
+            path = canonical_path(item0.data(Qt.UserRole))
             rec = self.records_by_path.get(path, {})
-            self.selected_project_path = rec.get("config_path", path)
+            self.selected_project_path = canonical_path(rec.get("config_path", path))
             self.btn_launch.setEnabled(True)
             self._update_inspector(rec)
 
@@ -2288,11 +2508,12 @@ class WBFMRecordingDashboard(QDialog):
     def _on_add_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Root Directory to Scan")
         if folder:
-            if folder not in self.search_roots:
-                self.search_roots.append(folder)
+            canon_folder = canonical_path(folder)
+            if canon_folder not in self.search_roots:
+                self.search_roots.append(canon_folder)
                 customs = load_custom_roots()
-                if folder not in customs:
-                    customs.append(folder)
+                if canon_folder not in [canonical_path(c) for c in customs]:
+                    customs.append(canon_folder)
                     save_custom_roots(customs)
             self._restart_scanner()
 
@@ -2305,7 +2526,7 @@ class WBFMRecordingDashboard(QDialog):
             "YAML files (*.yaml);;All files (*.*)"
         )
         if path:
-            self._launch_selected(path, self.chk_full_tracklets.isChecked())
+            self._launch_selected(canonical_path(path), self.chk_full_tracklets.isChecked())
 
     def _on_launch_clicked(self):
         if not self.selected_project_path:
@@ -2319,11 +2540,13 @@ class WBFMRecordingDashboard(QDialog):
         if not project_path:
             return
 
+        project_path = canonical_path(project_path)
+
         # Resolve directory to config yaml if present
         if os.path.isdir(project_path):
             candidate = os.path.join(project_path, "project_config.yaml")
             if os.path.exists(candidate):
-                project_path = candidate
+                project_path = canonical_path(candidate)
 
         self.selected_project_path = project_path
         self.load_tracklets = load_tracklets
@@ -2445,10 +2668,12 @@ def main():
         if args.load_tracklets is None and not args.fast:
             load_tracklets = False
 
-    if project_path and os.path.isdir(project_path):
-        candidate = os.path.join(project_path, "project_config.yaml")
-        if os.path.exists(candidate):
-            project_path = candidate
+    if project_path:
+        project_path = canonical_path(project_path)
+        if os.path.isdir(project_path):
+            candidate = os.path.join(project_path, "project_config.yaml")
+            if os.path.exists(candidate):
+                project_path = canonical_path(candidate)
 
     # Validate existence
     if project_path and os.path.exists(project_path):

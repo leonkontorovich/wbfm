@@ -17,6 +17,8 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from launch_gui import (
+    canonical_path,
+    get_project_fingerprint,
     load_history,
     load_history_entries,
     save_history,
@@ -771,5 +773,198 @@ class TestBilateralAndFlowLayout(unittest.TestCase):
         self.assertGreater(layout.heightForWidth(200), 0)
 
 
+
+class TestCanonicalPathAndFingerprinting(unittest.TestCase):
+    def test_canonical_path_windows_slashes(self):
+        p_fwd = "Z:/neurobiology/zimmer/LeonK/Lit_immob/ZIM2165_Litworm4-2026-09-17"
+        p_back = r"Z:\neurobiology\zimmer\LeonK\Lit_immob\ZIM2165_Litworm4-2026-09-17"
+        p_lower = r"z:\neurobiology\zimmer\LeonK\Lit_immob\ZIM2165_Litworm4-2026-09-17"
+        p_trailing = "Z:/neurobiology/zimmer/LeonK/Lit_immob/ZIM2165_Litworm4-2026-09-17/"
+
+        c_fwd = canonical_path(p_fwd)
+        c_back = canonical_path(p_back)
+        c_lower = canonical_path(p_lower)
+        c_trailing = canonical_path(p_trailing)
+
+        self.assertEqual(c_fwd, c_back)
+        self.assertEqual(c_fwd, c_lower)
+        self.assertEqual(c_fwd, c_trailing)
+        self.assertTrue(c_fwd.startswith("Z:\\"))
+
+    def test_get_project_fingerprint_invalidation(self):
+        with tempfile.TemporaryDirectory() as td:
+            proj_dir = os.path.join(td, "test_proj")
+            os.makedirs(proj_dir)
+            with open(os.path.join(proj_dir, "project_config.yaml"), "w") as f:
+                f.write("test: true\n")
+
+            fp1 = get_project_fingerprint(proj_dir)
+            fp1_repeat = get_project_fingerprint(proj_dir)
+            self.assertEqual(fp1, fp1_repeat, "Fingerprint should be deterministic for untouched project")
+
+            # Add tracking file
+            post_dir = os.path.join(proj_dir, "3-tracking", "postprocessing")
+            os.makedirs(post_dir)
+            tracks_file = os.path.join(post_dir, "combined_3d_tracks.h5")
+            with open(tracks_file, "wb") as f:
+                f.write(b"dummy_tracks")
+
+            fp2 = get_project_fingerprint(proj_dir)
+            self.assertNotEqual(fp1, fp2, "Creating combined_3d_tracks.h5 should invalidate fingerprint")
+
+            # Add manual annotation excel
+            ann_dir = os.path.join(proj_dir, "3-tracking", "manual_annotation")
+            os.makedirs(ann_dir)
+            ann_file = os.path.join(ann_dir, "manual_annotation.xlsx")
+            with open(ann_file, "wb") as f:
+                f.write(b"dummy_excel_1")
+
+            fp3 = get_project_fingerprint(proj_dir)
+            self.assertNotEqual(fp2, fp3, "Creating manual_annotation.xlsx should invalidate fingerprint")
+
+
+class TestDeduplicationAndStateUpdates(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance()
+        if cls.app is None:
+            cls.app = QApplication(sys.argv)
+
+    def setUp(self):
+        self.dashboard = WBFMRecordingDashboard()
+
+    def tearDown(self):
+        self.dashboard.stop_scanner()
+        self.dashboard.close()
+
+    def test_discovery_deduplication_different_slashes(self):
+        r1 = {
+            "name": "ZIM2165_Litworm4-2026-09-17",
+            "path": "Z:/neurobiology/zimmer/LeonK/Lit_immob/ZIM2165_Litworm4-2026-09-17",
+            "config_path": "Z:/neurobiology/zimmer/LeonK/Lit_immob/ZIM2165_Litworm4-2026-09-17/project_config.yaml",
+            "date": "2026-09-17",
+            "strain": "ZIM2165",
+            "has_masks": True,
+            "has_tracks": False,
+            "has_traces": False,
+            "has_barlow": False,
+            "tracked_count": None,
+            "annotated_count": 0,
+            "annotated_total": 0,
+            "annotated_names": [],
+            "annotated_details": [],
+            "is_fully_processed": False,
+            "missing_annotations": False,
+            "is_recent": True,
+        }
+        r2 = {
+            "name": "ZIM2165_Litworm4-2026-09-17",
+            "path": r"Z:\neurobiology\zimmer\LeonK\Lit_immob\ZIM2165_Litworm4-2026-09-17",
+            "config_path": r"Z:\neurobiology\zimmer\LeonK\Lit_immob\ZIM2165_Litworm4-2026-09-17\project_config.yaml",
+            "date": "2026-09-17",
+            "strain": "ZIM2165",
+            "has_masks": True,
+            "has_tracks": False,
+            "has_traces": False,
+            "has_barlow": False,
+            "tracked_count": None,
+            "annotated_count": 0,
+            "annotated_total": 0,
+            "annotated_names": [],
+            "annotated_details": [],
+            "is_fully_processed": False,
+            "missing_annotations": False,
+            "is_recent": False,
+        }
+
+        self.dashboard._on_recording_discovered(r1)
+        self.assertEqual(self.dashboard.table.rowCount(), 1)
+
+        # Emitting duplicate with backslashes should not insert duplicate row
+        self.dashboard._on_recording_discovered(r2)
+        self.assertEqual(self.dashboard.table.rowCount(), 1, "Duplicate recording path with different slashes must not create duplicate table row")
+        self.assertEqual(len(self.dashboard.records_by_path), 1)
+
+    def test_update_matches_differently_slashed_path(self):
+        r1 = {
+            "name": "ZIM2165_Litworm4-2026-09-17",
+            "path": "Z:/neurobiology/zimmer/LeonK/Lit_immob/ZIM2165_Litworm4-2026-09-17",
+            "config_path": "Z:/neurobiology/zimmer/LeonK/Lit_immob/ZIM2165_Litworm4-2026-09-17/project_config.yaml",
+            "date": "2026-09-17",
+            "strain": "ZIM2165",
+            "has_masks": False,
+            "has_tracks": False,
+            "has_traces": False,
+            "has_barlow": False,
+            "tracked_count": None,
+            "annotated_count": 0,
+            "annotated_total": 0,
+            "annotated_names": [],
+            "annotated_details": [],
+            "is_fully_processed": False,
+            "missing_annotations": False,
+            "is_recent": True,
+        }
+        self.dashboard._on_recording_discovered(r1)
+        self.assertEqual(self.dashboard.table.rowCount(), 1)
+        self.assertEqual(self.dashboard.table.item(0, 6).text(), "-")
+
+        # Update with backslashes and newly completed tracks
+        r1_updated = dict(r1)
+        r1_updated["path"] = r"Z:\neurobiology\zimmer\LeonK\Lit_immob\ZIM2165_Litworm4-2026-09-17"
+        r1_updated["has_tracks"] = True
+        r1_updated["tracked_count"] = 185
+
+        self.dashboard._on_recording_updated(r1_updated)
+        self.assertEqual(self.dashboard.table.rowCount(), 1, "Updating record should not create duplicate row")
+        self.assertEqual(self.dashboard.table.item(0, 6).text(), "185", "Tracked count must update properly")
+        self.assertEqual(self.dashboard.table.item(0, 3).text(), "✓", "3D Tracks badge must update to checkmark")
+
+    def test_discovery_applies_row_filter_immediately(self):
+        # Set an active filter
+        self.dashboard.search_input.setText("ZIM2554")
+
+        # Discover a non-matching recording
+        r_other = {
+            "name": "AX10059worm1-2026-04-10",
+            "path": r"C:\fake\AX10059worm1-2026-04-10",
+            "config_path": r"C:\fake\AX10059worm1-2026-04-10\project_config.yaml",
+            "date": "2026-04-10",
+            "strain": "AX10059",
+            "is_recent": False,
+        }
+        self.dashboard._on_recording_discovered(r_other)
+        row = self.dashboard.table.rowCount() - 1
+        self.assertTrue(self.dashboard.table.isRowHidden(row), "Newly discovered non-matching row must be filtered immediately")
+
+    def test_cache_invalidation_when_indicator_file_added(self):
+        with tempfile.TemporaryDirectory() as td:
+            proj_dir = os.path.join(td, "worm_proj")
+            os.makedirs(proj_dir)
+            cfg_file = os.path.join(proj_dir, "project_config.yaml")
+            with open(cfg_file, "w") as f:
+                f.write("dummy: 1\n")
+
+            cache = {}
+            meta1 = extract_metadata_for_project(proj_dir, cache=cache)
+            self.assertFalse(meta1["has_tracks"])
+            self.assertIn(canonical_path(proj_dir), cache)
+
+            # Subsequent call returns cached
+            meta1_cached = extract_metadata_for_project(proj_dir, cache=cache)
+            self.assertFalse(meta1_cached["has_tracks"])
+
+            # Add tracking file into subdirectory
+            post_dir = os.path.join(proj_dir, "3-tracking", "postprocessing")
+            os.makedirs(post_dir)
+            with open(os.path.join(post_dir, "combined_3d_tracks.h5"), "wb") as f:
+                f.write(b"dummy_tracks")
+
+            # Even with same cache, new file must invalidate fingerprint and update metadata
+            meta2 = extract_metadata_for_project(proj_dir, cache=cache)
+            self.assertTrue(meta2["has_tracks"], "Cache must be invalidated when combined_3d_tracks.h5 is added")
+
+
 if __name__ == "__main__":
     unittest.main()
+
