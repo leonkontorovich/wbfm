@@ -34,14 +34,15 @@ class TestBehaviorCodes(unittest.TestCase):
 
     def test_must_be_manually_annotated(self):
         # Test the specific behaviors that must be manually annotated
-        self.assertTrue(BehaviorCodes.must_be_manually_annotated(BehaviorCodes.FWD | BehaviorCodes.VENTRAL_TURN))
-        self.assertTrue(BehaviorCodes.must_be_manually_annotated(BehaviorCodes.FWD | BehaviorCodes.DORSAL_TURN))
-        self.assertTrue(BehaviorCodes.must_be_manually_annotated(BehaviorCodes.REV | BehaviorCodes.VENTRAL_TURN))
-        self.assertTrue(BehaviorCodes.must_be_manually_annotated(BehaviorCodes.REV | BehaviorCodes.DORSAL_TURN))
         self.assertTrue(BehaviorCodes.must_be_manually_annotated(BehaviorCodes.SUPERCOIL))
         self.assertTrue(BehaviorCodes.must_be_manually_annotated(BehaviorCodes.QUIESCENCE))
 
         # Test the behaviors that do not need to be manually annotated
+        # Turns are now automatically annotated (see BehaviorCodes), so they no longer require manual annotation
+        self.assertFalse(BehaviorCodes.must_be_manually_annotated(BehaviorCodes.FWD | BehaviorCodes.VENTRAL_TURN))
+        self.assertFalse(BehaviorCodes.must_be_manually_annotated(BehaviorCodes.FWD | BehaviorCodes.DORSAL_TURN))
+        self.assertFalse(BehaviorCodes.must_be_manually_annotated(BehaviorCodes.REV | BehaviorCodes.VENTRAL_TURN))
+        self.assertFalse(BehaviorCodes.must_be_manually_annotated(BehaviorCodes.REV | BehaviorCodes.DORSAL_TURN))
         self.assertFalse(BehaviorCodes.must_be_manually_annotated(BehaviorCodes.FWD))
         self.assertFalse(BehaviorCodes.must_be_manually_annotated(BehaviorCodes.REV))
         self.assertFalse(BehaviorCodes.must_be_manually_annotated(BehaviorCodes.NOT_ANNOTATED))

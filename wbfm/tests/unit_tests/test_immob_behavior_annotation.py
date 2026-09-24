@@ -1,14 +1,19 @@
+import os
 import unittest
+
+import pytest
 
 from wbfm.utils.general.utils_behavior_annotation import BehaviorCodes
 from wbfm.utils.projects.finished_project_data import ProjectData
 
+PROJECT_PATH = "/scratch/neurobiology/zimmer/fieseler/wbfm_projects/2022-12-12_immob/2022-12-13_15-16_ZIM2165_immob_worm9-2022-12-13"
 
+
+@pytest.mark.skipif(not os.path.exists(PROJECT_PATH), reason=f"Needs cluster-only project data: {PROJECT_PATH}")
 class TestImmobBehavior(unittest.TestCase):
 
     def setUp(self) -> None:
-        fname = "/scratch/neurobiology/zimmer/fieseler/wbfm_projects/2022-12-12_immob/2022-12-13_15-16_ZIM2165_immob_worm9-2022-12-13"
-        self.project_data = ProjectData.load_final_project_data_from_config(fname)
+        self.project_data = ProjectData.load_final_project_data_from_config(PROJECT_PATH)
 
     def test_immob_behavior_annotation(self):
         # Check they are not empty

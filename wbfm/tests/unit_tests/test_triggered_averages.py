@@ -18,8 +18,10 @@ class TestBinaryVectors(unittest.TestCase):
         # Create a series with short and long bouts
         beh = np.hstack([np.zeros(short), np.ones(long), np.zeros(long), np.ones(long), np.zeros(short), np.ones(short)])
         # Create a misannotated hole
-        beh_complex = beh.copy()
-        beh_complex[5] = 0
+        # BehaviorCodes is a Flag (not an int), so UNKNOWN can't be stored in a float array; build an enum Series
+        # instead, which is what TriggeredAverageIndices uses to detect onsets directly after UNKNOWN frames
+        beh_complex = [BehaviorCodes.CUSTOM if b == 1 else BehaviorCodes.NOT_ANNOTATED for b in beh]
+        beh_complex[5] = BehaviorCodes.NOT_ANNOTATED
         beh_complex[11] = BehaviorCodes.UNKNOWN
         beh_complex[17] = BehaviorCodes.UNKNOWN
 
@@ -27,7 +29,8 @@ class TestBinaryVectors(unittest.TestCase):
         self.beh_complex = pd.Series(beh_complex)
         self.num_frames = len(beh)
 
-        self.opt = dict(trace_len=self.num_frames, ind_preceding=0, behavioral_state=1)
+        # Numeric (binary) input is mapped to BehaviorCodes.CUSTOM internally
+        self.opt = dict(trace_len=self.num_frames, ind_preceding=0, behavioral_state=BehaviorCodes.CUSTOM)
 
     def test_basic_contiguous_blocks(self):
         starts, ends = get_contiguous_blocks_from_column(self.beh, already_boolean=True)
@@ -43,7 +46,7 @@ class TestBinaryVectors(unittest.TestCase):
         self.assertEqual(expected, onset_vec)
 
     def test_complex_contiguous_blocks(self):
-        starts, ends = get_contiguous_blocks_from_column(self.beh_complex == 1, already_boolean=True)
+        starts, ends = get_contiguous_blocks_from_column(self.beh_complex == BehaviorCodes.CUSTOM, already_boolean=True)
 
         self.assertEqual(starts, [3, 6, 15, 18, 24])
         self.assertEqual(ends, [5, 9, 17, 21, 27])
@@ -61,7 +64,7 @@ class TestBinaryVectors(unittest.TestCase):
         self.assertEqual(expected, list(np.where(onset_vec)[0]))
 
     def test_remove_small_gaps(self):
-        beh = remove_short_state_changes(self.beh_complex == 1, min_length=2)
+        beh = remove_short_state_changes(self.beh_complex == BehaviorCodes.CUSTOM, min_length=2)
         expected = [0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1]
         self.assertEqual(expected, list(beh))
 

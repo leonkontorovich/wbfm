@@ -1,10 +1,15 @@
+import os
 import unittest
 import numpy as np
-from parameterized import parameterized_class
+import pytest
 
 from wbfm.utils.projects.finished_project_data import ProjectData
 
+# Example project; only available on the cluster
+PROJECT_PATH = '/scratch/neurobiology/zimmer/brenner/wbfm_projects/analyze/immobilized_wt/2023-09-07_16-11_CaMP7b_O2_worm1-2023-09-07/project_config.yaml'
 
+
+@pytest.mark.skipif(not os.path.exists(PROJECT_PATH), reason=f"Needs cluster-only project data: {PROJECT_PATH}")
 class TestWormPostureClass(unittest.TestCase):
 
     def setUp(self):

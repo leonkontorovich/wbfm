@@ -32,7 +32,8 @@ class TestTrackletSplitting(unittest.TestCase):
 
         # Two columns per neuron; test that the lengths are correct
         expected_lens = [11, 11, 9, 9]
-        split_lens = list(df_split.count())
+        # Per-column Series.count(): DataFrame.count() on Sparse columns returns 1 per column in pandas 3.0
+        split_lens = [df_split[c].count() for c in df_split.columns]
         self.assertEqual(expected_lens, split_lens)
 
         # Specific indices are correct
@@ -63,7 +64,8 @@ class TestTrackletSplitting(unittest.TestCase):
 
         # Two columns per neuron; test that the lengths are correct
         expected_lens = [5, 5, 5, 5, 5, 5, 5, 5]
-        split_lens = list(df_split.count())
+        # Per-column Series.count(): DataFrame.count() on Sparse columns returns 1 per column in pandas 3.0
+        split_lens = [df_split[c].count() for c in df_split.columns]
         self.assertEqual(expected_lens, split_lens)
 
         # Specific indices are correct
@@ -86,7 +88,8 @@ class TestTrackletSplitting(unittest.TestCase):
 
         # Two columns per neuron; test that the lengths are correct
         expected_lens = [10, 10, 5, 5, 5, 5]
-        split_lens = list(df_split.count())
+        # Per-column Series.count(): DataFrame.count() on Sparse columns returns 1 per column in pandas 3.0
+        split_lens = [df_split[c].count() for c in df_split.columns]
         self.assertEqual(expected_lens, split_lens)
 
         # Specific indices are correct
@@ -108,7 +111,8 @@ class TestTrackletSplitting(unittest.TestCase):
 
         # Two columns per neuron
         expected_lens = [10, 10, 5, 5, 5, 5]
-        split_lens = list(df_split.count())
+        # Per-column Series.count(): DataFrame.count() on Sparse columns returns 1 per column in pandas 3.0
+        split_lens = [df_split[c].count() for c in df_split.columns]
         self.assertEqual(expected_lens, split_lens)
 
         # Specific indices
@@ -140,7 +144,8 @@ class TestTrackletSplitting(unittest.TestCase):
 
         # Two columns per neuron
         expected_lens = [10, 10, 5, 5, 5, 5]
-        split_lens = list(df_split.count())
+        # Per-column Series.count(): DataFrame.count() on Sparse columns returns 1 per column in pandas 3.0
+        split_lens = [df_split[c].count() for c in df_split.columns]
         self.assertEqual(expected_lens, split_lens)
 
         # Specific indices

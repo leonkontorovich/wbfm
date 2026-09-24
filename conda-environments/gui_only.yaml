@@ -15,6 +15,7 @@ dependencies:
   - pytables
   - openpyxl
   - pyqt
+  - pytest
   - pip:
     - opencv-python-headless
     - statsmodels

@@ -4,6 +4,9 @@ Quick test of grouped_cv_compare functionality.
 """
 import pandas as pd
 import os
+import pytest
+
+pytest.importorskip("pymc")
 from wbfm.utils.external.utils_pymc import grouped_cv_compare
 from wbfm.utils.general.utils_hardcoded import get_hierarchical_modeling_dir
 
@@ -12,6 +15,8 @@ data_dir = get_hierarchical_modeling_dir(gfp=False)
 fname = os.path.join(data_dir, 'data.h5')
 if not os.path.exists(fname):
     fname = os.path.join(data_dir, 'data_backup.h5')
+if not os.path.exists(fname):
+    pytest.skip(f"Hierarchical modeling data not found (cluster-only): {fname}", allow_module_level=True)
 
 print(f"Loading data from {fname}")
 Xy = pd.read_hdf(fname)

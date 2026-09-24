@@ -1,16 +1,22 @@
+import os
 import unittest
 import random
+
+import pytest
 
 from wbfm.utils.projects.finished_project_data import ProjectData
 from wbfm.utils.general.high_performance_pandas import get_names_from_df
 
+PROJECT_PATH = "/scratch/neurobiology/zimmer/fieseler/wbfm_projects/project_pytest/project_config.yaml"
 
+
+@pytest.mark.skipif(not os.path.exists(PROJECT_PATH), reason=f"Needs cluster-only test project: {PROJECT_PATH}")
 class TestTrackletAddingAndRemoving(unittest.TestCase):
 
     def setUp(self) -> None:
         # Load a test project
         # See napari_trace_explorer_from_config.py for an example of how to load a project
-        project_path = "/scratch/neurobiology/zimmer/fieseler/wbfm_projects/project_pytest/project_config.yaml"
+        project_path = PROJECT_PATH
         initialization_kwargs = dict(use_custom_padded_dataframe=False,
                                      force_tracklets_to_be_sparse=False,
                                      verbose=0)
