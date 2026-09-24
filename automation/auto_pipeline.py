@@ -272,6 +272,7 @@ def initialize_project(raw_dir: Path, output_parent_dir: Optional[Path] = None, 
         f"experimenter='{experimenter}' "
         f"{physical_unit_overrides}"
     )
+    before_init_ts = time.time()
     run_ssh_cmd(init_cmd)
     time.sleep(3)
 
@@ -287,7 +288,31 @@ def initialize_project(raw_dir: Path, output_parent_dir: Optional[Path] = None, 
     if not matching:
         raise RuntimeError(f"No project directory found inside {output_parent_dir} after initialization")
 
-    project_dir = max(matching, key=lambda p: p.stat().st_mtime)
+    # NOTE: st_mtime is unreliable here - copytree() from new_project_defaults preserves the
+    # template files' original mtimes, so a brand-new project can appear "older" than an
+    # existing, already-completed sibling project of the same worm (whose directory mtime was
+    # bumped by e.g. a later PIPELINE_COMPLETE.flag write). Use directory creation time
+    # (st_ctime, which Windows sets to first-seen time and is NOT touched by copytree) instead,
+    # and restrict to directories actually created by *this* call to avoid silently picking a
+    # stale pre-existing project.
+    just_created = [p for p in matching if p.stat().st_ctime >= before_init_ts - 5]
+    if len(just_created) == 1:
+        matching = just_created
+    elif len(just_created) > 1:
+        raise RuntimeError(
+            f"Ambiguous project creation: {len(just_created)} directories matching '{experimenter}' "
+            f"in {output_parent_dir} all appear freshly created ({[p.name for p in just_created]}); "
+            f"refusing to guess which one is correct."
+        )
+    elif len(matching) > 1:
+        raise RuntimeError(
+            f"Could not identify the newly created project directory for '{experimenter}' in "
+            f"{output_parent_dir}: {len(matching)} pre-existing candidates found "
+            f"({[p.name for p in matching]}) and none appear freshly created. Refusing to guess "
+            f"and silently reuse a stale project."
+        )
+
+    project_dir = matching[0]
     project_linux = win_to_linux_path(project_dir)
     logger.info(f"Project initialized: {project_dir.name}")
 
