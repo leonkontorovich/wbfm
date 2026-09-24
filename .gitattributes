@@ -1,3 +1,8 @@
-# Ensure shell and snakemake workflow scripts always retain LF line endings on Windows
+# Enforce LF line endings for shell and pipeline scripts on all platforms
 *.sh text eol=lf
 *.smk text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.bat text eol=crlf
