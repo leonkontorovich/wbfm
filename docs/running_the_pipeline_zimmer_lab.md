@@ -139,6 +139,9 @@ Observed per-worm timings (ZIM2165 immobilized, 18 min recordings, 2026-09):
 | extract_full_traces | ~10 min, so **traces are ready after ~9-13 h** |
 | barlow_embedding | ~50 min, so **fully complete after ~10-14 h** |
 
+> [!IMPORTANT]
+> **Resource Sizing for Segmentation**: In the Oct 2026 LiSC cluster audit, segmentation jobs requested `256G` RAM and `40` CPUs for `36h`, but only consumed peak **13.2 GB RAM** (95% memory wasted) and **8.3 cores** (79% CPU wasted) across ~12 hours. Do not allocate 256G / 40 cores in `cluster_config.yaml`. Right-size requests to `--mem=32G` (max 48G), `--cpus-per-task=10` to `12`, and `--time=16:00:00` to avoid FairShare penalties and queue delays.
+
 #### *IMPORTANT*: the Barlow step must not re-run segmentation
 
 Once masks exist, `pipeline.smk` switches its `ruleorder` from `segmentation` to `alt_segmentation`. That rule has a
