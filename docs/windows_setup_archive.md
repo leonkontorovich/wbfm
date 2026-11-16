@@ -1,6 +1,8 @@
-# wbfm on Windows — setup, pipeline, and GUI guide
+# wbfm on Windows — setup, pipeline, and GUI guide (Archived Reference)
 
-**Written from the macOS clone at `~/Documents/GitHubRepositories/wbfm` (branch `main`, package version 1.4.0).**
+> [!NOTE]
+> This document is archived historical setup and reference documentation originally written from a macOS clone at `~/Documents/GitHubRepositories/wbfm` (branch `main`, package version 1.4.0).
+> For current, active AI agent guidelines, static tool safety rules, and operational commands, consult [AGENTS.md](file:///C:/GithubRepositories/wbfm/AGENTS.md).
 
 This document has three parts:
 
@@ -194,7 +196,7 @@ Rule of thumb: **create and run each project on the same machine.**
 
 Open a terminal in the Windows clone of this repo, start Claude Code, and paste:
 
-> Read `WINDOWS_SETUP_FOR_CLAUDE.md` in the repo root. It is a setup guide written from my macOS clone of the same repo, and it contains `▸ Claude:` blocks with the exact commands and verification checks for each step.
+> Read `docs/windows_setup_archive.md`. It is a setup guide written from my macOS clone of the same repo, and it contains `▸ Claude:` blocks with the exact commands and verification checks for each step.
 >
 > Work through Part 2 in order. For each step: run the verification first, tell me whether it passed, and only then make changes. Stop and ask me before (a) creating or deleting a conda environment, (b) editing anything under `wbfm/new_project_defaults/`, (c) any step the guide marks as needing lab-supplied network weights.
 >

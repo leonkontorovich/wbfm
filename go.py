@@ -5,6 +5,7 @@ Usage:
   python go.py [optional_raw_folder]
   python go.py status <project_folder>
   python go.py verify <project_folder>
+  python go.py check-ids <project_or_batch_folder> [--only-pending]
 """
 import sys
 from pathlib import Path
@@ -18,6 +19,6 @@ if __name__ == "__main__":
     # If called with no arguments or directly with a folder path, default to 'go'
     if len(sys.argv) == 1:
         sys.argv.append("go")
-    elif sys.argv[1] not in ["go", "sanitize", "status", "verify", "-h", "--help"]:
+    elif sys.argv[1] not in ["go", "sanitize", "status", "verify", "check-ids", "-h", "--help"]:
         sys.argv.insert(1, "go")
     main()

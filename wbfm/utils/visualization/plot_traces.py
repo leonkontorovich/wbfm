@@ -561,7 +561,8 @@ def make_grid_plot_from_callables(get_data_func: callable,
             # For removing the lines from the legends:
             # https://stackoverflow.com/questions/25123127/how-do-you-just-show-the-text-label-in-plot-legend-e-g-remove-a-labels-line
             leg = ax.legend(loc='upper left', handlelength=0, handletextpad=0, fancybox=True, framealpha=0.0)
-            for item in leg.legendHandles:
+            handles = getattr(leg, 'legend_handles', None) or getattr(leg, 'legendHandles', [])
+            for item in handles:
                 item.set_visible(False)
             ax.set_frame_on(False)
             ax.set_axis_off()

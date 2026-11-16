@@ -234,13 +234,15 @@ class NapariTraceExplorer(QtWidgets.QWidget):
             msg = f"Masks, Tracklets, and {msg}"
         self.formlayout7.addRow(msg, self.mainSaveButton)
 
+        # Rarely-changed sections start collapsed (a header button shows/hides them) to keep the panel short
         self.verticalLayout.addWidget(self.groupBox1NeuronSelection)
-        self.verticalLayout.addWidget(self.groupBox2TraceCalculation)
+        self._add_collapsible_section(self.groupBox2TraceCalculation, "Trace calculation options", expanded=False)
         if self.load_tracklets:
-            self.verticalLayout.addWidget(self.groupBox3TrackletCorrection)
+            self._add_collapsible_section(self.groupBox3TrackletCorrection, "Tracklet correction", expanded=True)
             # self.verticalLayout.addWidget(self.groupBox5)
-            self.verticalLayout.addWidget(self.groupBox6SegmentationCorrection)
-        self.verticalLayout.addWidget(self.groupBox5LayerCreation)
+            self._add_collapsible_section(self.groupBox6SegmentationCorrection, "Segmentation correction",
+                                          expanded=False)
+        self._add_collapsible_section(self.groupBox5LayerCreation, "New layer creation", expanded=False)
         self.verticalLayout.addWidget(self.groupBox7SaveData)
 
         try:
@@ -271,7 +273,7 @@ class NapariTraceExplorer(QtWidgets.QWidget):
             self.manualNeuronNameEditor.annotation_updated.connect(update_func)
             self.manualNeuronNameEditor.multiple_annotations_updated.connect(update_func)
             self.manualNeuronNameEditor.setWindowTitle(f"Fluorescence Neuron Name Editor for project: {self.dat.project_dir}")
-            self.manualNeuronNameEditor.show()
+            # Shown as a docked tab by dock_name_editors(), once the main panel is docked
 
         # Optional: add neuropal layer interactivity
         if self.dat.neuropal_manager.segmentation_succeeded:
@@ -283,7 +285,6 @@ class NapariTraceExplorer(QtWidgets.QWidget):
                 self.manualNeuropalNeuronNameEditor.setWindowTitle(f"Neuropal Neuron Name Editor for project: {self.dat.project_dir}")
                 # Change the background to light blue to differentiate from the other window
                 self.manualNeuropalNeuronNameEditor.setStyleSheet("background-color: lightblue;")
-                self.manualNeuropalNeuronNameEditor.show()
 
                 # Also add interactivity to the segmentation layer
                 self.add_neuropal_neuron_selection_callback()
@@ -291,6 +292,32 @@ class NapariTraceExplorer(QtWidgets.QWidget):
             self.manualNeuropalNeuronNameEditor = None
 
         self.logger.debug("Finished main UI setup")
+
+    def _add_collapsible_section(self, widget, title, expanded=True):
+        """
+        Add ``widget`` (e.g. a QGroupBox) to the main panel under a header button that shows/hides it
+
+        Only visibility changes: the widgets inside keep their own enabled/disabled state, so the explorer's
+        logic for enabling buttons is unaffected (a checkable QGroupBox would override it).
+        """
+        if isinstance(widget, QtWidgets.QGroupBox):
+            widget.setTitle("")  # The header button carries the title
+        button = QtWidgets.QToolButton()
+        button.setCheckable(True)
+        button.setStyleSheet("QToolButton { border: none; font-weight: bold; text-align: left; }")
+        button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        button.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+
+        def update(checked):
+            button.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+            button.setText(f" {title}")
+            widget.setVisible(checked)
+
+        button.toggled.connect(update)
+        button.setChecked(expanded)
+        update(expanded)
+        self.verticalLayout.addWidget(button)
+        self.verticalLayout.addWidget(widget)
 
     def _setup_trace_filtering_buttons(self):
         # Change traces (dropdown)
@@ -439,29 +466,48 @@ class NapariTraceExplorer(QtWidgets.QWidget):
         self.recentTrackletSelector.currentIndexChanged.connect(self.change_tracklets_using_dropdown)
         self.recentTrackletSelector.setToolTip("Select from history of recent tracklets")
 
+        # Buttons that only duplicate a keyboard shortcut (key in brackets in the label) are tucked away
+        self.shortcutButtonsToggle = QtWidgets.QToolButton()
+        self.shortcutButtonsToggle.setCheckable(True)
+        self.shortcutButtonsToggle.setStyleSheet("QToolButton { border: none; text-align: left; }")
+        self.shortcutButtonsToggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.shortcutButtonsContainer = QtWidgets.QWidget()
+        self.vbox4b = QtWidgets.QVBoxLayout(self.shortcutButtonsContainer)
+        self.vbox4b.setContentsMargins(0, 0, 0, 0)
+
+        def _toggle_shortcut_buttons(checked):
+            self.shortcutButtonsToggle.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+            self.shortcutButtonsToggle.setText(" Buttons for keyboard shortcuts (j h q e w c x)")
+            self.shortcutButtonsContainer.setVisible(checked)
+
+        self.shortcutButtonsToggle.toggled.connect(_toggle_shortcut_buttons)
+        self.vbox4.addWidget(self.shortcutButtonsToggle)
+        self.vbox4.addWidget(self.shortcutButtonsContainer)
+        _toggle_shortcut_buttons(False)
+
         # self.zoom4Button = QtWidgets.QPushButton("Zoom to next time with tracklet conflict (g)")
         # self.zoom4Button.pressed.connect(self.zoom_to_next_conflict)
         # self.zoom4Button.setToolTip("Note: does nothing if there is no tracklet selected")
         # self.vbox4.addWidget(self.zoom4Button)
         self.zoom5Button = QtWidgets.QPushButton("Jump to end of current tracklet (j)")
         self.zoom5Button.pressed.connect(self.zoom_to_end_of_current_tracklet)
-        self.vbox4.addWidget(self.zoom5Button)
+        self.vbox4b.addWidget(self.zoom5Button)
         self.zoom6Button = QtWidgets.QPushButton("Jump to beginning of current tracklet (h)")
         self.zoom6Button.pressed.connect(self.zoom_to_start_of_current_tracklet)
-        self.vbox4.addWidget(self.zoom6Button)
+        self.vbox4b.addWidget(self.zoom6Button)
 
         # Splitting and removing shortcuts
         self.toggleSegButton = QtWidgets.QPushButton("Toggle Raw segmentation layer (s)")
         self.toggleSegButton.pressed.connect(self.toggle_raw_segmentation_layer)
         self.splitTrackletButton1 = QtWidgets.QPushButton("Split current tracklet (keep past) (q)")
         self.splitTrackletButton1.pressed.connect(self.split_current_tracklet_keep_left)
-        self.vbox4.addWidget(self.splitTrackletButton1)
+        self.vbox4b.addWidget(self.splitTrackletButton1)
         self.splitTrackletButton2 = QtWidgets.QPushButton("Split current tracklet (keep future) (e)")
         self.splitTrackletButton2.pressed.connect(self.split_current_tracklet_keep_right)
-        self.vbox4.addWidget(self.splitTrackletButton2)
+        self.vbox4b.addWidget(self.splitTrackletButton2)
         self.clearTrackletButton = QtWidgets.QPushButton("Clear current tracklet (w)")
         self.clearTrackletButton.pressed.connect(self.clear_current_tracklet)
-        self.vbox4.addWidget(self.clearTrackletButton)
+        self.vbox4b.addWidget(self.clearTrackletButton)
         self.removeTrackletButton1 = QtWidgets.QPushButton("Remove OTHER tracklets with time conflicts")
         self.removeTrackletButton1.pressed.connect(self.remove_time_conflicts)
         self.vbox4.addWidget(self.removeTrackletButton1)
@@ -471,12 +517,12 @@ class NapariTraceExplorer(QtWidgets.QWidget):
         self.appendTrackletButton = QtWidgets.QPushButton("Save current tracklet to neuron (IF conflict-free) (c)")
         self.appendTrackletButton.pressed.connect(self.save_current_tracklet_to_neuron)
         self.appendTrackletButton.setToolTip("Note: check console for more details of the conflict")
-        self.vbox4.addWidget(self.appendTrackletButton)
+        self.vbox4b.addWidget(self.appendTrackletButton)
 
         self.saveSegmentationToTrackletButton = QtWidgets.QPushButton("Save current segmentation "
                                                                       "to current tracklet (x)")
         self.saveSegmentationToTrackletButton.pressed.connect(self.save_segmentation_to_tracklet)
-        self.vbox4.addWidget(self.saveSegmentationToTrackletButton)
+        self.vbox4b.addWidget(self.saveSegmentationToTrackletButton)
 
         self.deleteSegmentationFromTrackletButton = QtWidgets.QPushButton("Delete current segmentation "
                                                                           "from current tracklet")
@@ -799,13 +845,24 @@ class NapariTraceExplorer(QtWidgets.QWidget):
             self.logger.error("If this is a NWB project, then modifications cannot be saved yet!")
             return
 
-        with self.dat.tracklet_annotator.saving_lock:
+        import contextlib
+        annotator = getattr(self.dat, 'tracklet_annotator', None)
+        lock = annotator.saving_lock if annotator is not None else contextlib.nullcontext()
+        with lock:
             # Set any None values to True; this means nothing was done
             all_flags = {k: v if v is not None else True for k, v in all_flags.items()}
             if not all(all_flags.values()):
                 self.logger.error("Failed to save at least one step to disk!")
                 self.logger.error(f"'False' means failed step: {all_flags}")
                 self.logger.error("Please try again, or ctrl-c to fully quit (if this was expected)")
+                failed = [k for k, v in all_flags.items() if not v]
+                detail = ""
+                if 'manual_ids' in failed and self.manualNeuronNameEditor is not None:
+                    err = getattr(self.manualNeuronNameEditor, 'last_save_error', None)
+                    detail = (f"\n\nName file not written: {err}\n(Is manual_annotation.xlsx open in Excel?) "
+                              f"A backup copy was written to ~/.wbfm/manual_annotation_backups/.") if err else ""
+                QtWidgets.QMessageBox.warning(
+                    self, "Save failed", f"These steps FAILED to save: {', '.join(failed)}.{detail}")
             else:
                 self.logger.info("================================================================")
                 self.logger.info("Saving successful!")
@@ -1201,6 +1258,38 @@ class NapariTraceExplorer(QtWidgets.QWidget):
     def select_neuron(self, neuron_name):
         # This runs all the callbacks that happen when a neuron is selected
         self.changeNeuronDropdown.setCurrentText(neuron_name)
+
+    def dock_name_editors(self):
+        """Dock the neuron-name tables as tabs next to the main controls (instead of separate floating windows)"""
+        for editor, title in [(self.manualNeuronNameEditor, "Neuron names"),
+                              (self.manualNeuropalNeuronNameEditor, "Neuropal names")]:
+            if not editor:
+                continue
+            try:
+                editor.setMinimumWidth(480)
+                self.viewer.window.add_dock_widget(editor, area='right', name=title, tabify=True)
+            except Exception as e:
+                self.logger.warning(f"Could not dock '{title}' ({e}); showing it as a separate window")
+                editor.show()
+
+    def add_question_mark_reviewer(self):
+        """Dock the step-through review of uncertain ('?') IDs as a tab next to the main controls.
+
+        Only added if there is something to review (keeps the GUI uncluttered otherwise)."""
+        self.questionMarkReviewer = None
+        editor = self.manualNeuronNameEditor
+        if editor is None or not editor.uncertain_neurons():
+            return
+        from wbfm.gui.utils.question_mark_reviewer import QuestionMarkReviewer
+        reviewer = QuestionMarkReviewer(editor, project_data=self.dat, select_neuron=self.select_neuron)
+        self.questionMarkReviewer = reviewer
+        self.viewer.window.add_dock_widget(reviewer, area='right', name="'?' Review", tabify=True)
+
+        # Keys that don't collide with the explorer's existing napari shortcuts (also work with the canvas focused)
+        for key, func in [('Ctrl-Y', reviewer.accept_current), ('Ctrl-N', reviewer.reject_current),
+                          ('Ctrl-K', reviewer.skip), ('Ctrl-B', reviewer.previous), ('Ctrl-U', reviewer.undo)]:
+            self.viewer.bind_key(key, lambda viewer, f=func: f(), overwrite=True)
+        self.logger.info(f"{len(reviewer.queue)} uncertain ('?') IDs to review; see the '?' Review tab")
 
     def resolve_current_ground_truth_conflict(self):
         # if self.dat.tracklet_annotator.gt_mismatches is None:
@@ -2317,6 +2406,8 @@ def napari_trace_explorer(project_data: ProjectData,
     ui.setup_ui(viewer)
     viewer.window.add_dock_widget(ui)
     ui.show()
+    ui.dock_name_editors()
+    ui.add_question_mark_reviewer()
     change_viewer_time_point(viewer, t_target=10)
 
     if to_print_fps:

@@ -14,6 +14,7 @@ import json
 import re
 import datetime
 import logging
+import functools
 from typing import Optional, List, Dict, Tuple, Any
 
 # Add wbfm to path
@@ -24,7 +25,7 @@ from qtpy.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QCheckBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QFileDialog, QProgressBar, QFrame,
     QSpacerItem, QSizePolicy, QMessageBox, QMenu, QAction, QSplitter,
-    QScrollArea, QSplashScreen, QLayout
+    QScrollArea, QSplashScreen, QLayout, QComboBox
 )
 from qtpy.QtCore import Qt, QThread, Signal, Slot, QTimer, QSettings, QPoint, QRect, QSize
 from qtpy.QtGui import QColor, QFont, QIcon, QBrush, QPixmap, QPainter
@@ -34,8 +35,14 @@ CUSTOM_ROOTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".c
 CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".dashboard_cache.json")
 
 DEFAULT_SEARCH_ROOTS = [
-    r"Z:\neurobiology\zimmer\LeonK\Analysis04092026",
-    r"Z:\neurobiology\zimmer\LeonK\Analysis_Final_Worms_Strict_Chirality_No_Overlap",
+    r"Z:\LeonK\Lit_immob",
+    r"Z:\LeonK\25_degrees_npr-1_vs_rde4",
+    r"Z:\LeonK\20_degrees_N2",
+    r"Z:\LeonK\25_degrees_N2_vs_rde4",
+    r"Z:\LeonK\Itamar_lit_immob",
+    r"Z:\LeonK\Itamar_immob_pool",
+    r"Z:\LeonK\Itamar_tet_reembed",
+    r"Z:\neurobiology\zimmer\LeonK\Lit_immob",
     r"Z:\neurobiology\zimmer\LeonK\25_degrees_npr-1_vs_rde4",
 ]
 
@@ -260,11 +267,45 @@ QPushButton#quickGlanceButton:disabled {
 # Canonical Path & File Fingerprinting
 # ==============================================================================
 
+@functools.lru_cache(maxsize=4096)
+def resolve_existing_path(p: str) -> str:
+    """If path does not exist, check alternative network share mounts (Z:\\ vs Z:\\neurobiology\\zimmer).
+
+    Touches the filesystem (network stats on Z:), so it is cached and must only be called for
+    scan roots / launch targets, from the worker thread where possible. Never call it from
+    ``canonical_path``, which runs per-row on the UI thread.
+    """
+    if not p:
+        return p
+    try:
+        if os.path.exists(p):
+            return p
+    except Exception:
+        pass
+    p_norm = os.path.normpath(p)
+    if p_norm.lower().startswith("z:\\neurobiology\\zimmer"):
+        alt = "Z:" + p_norm[len("z:\\neurobiology\\zimmer"):]
+        try:
+            if os.path.exists(alt):
+                return alt
+        except Exception:
+            pass
+    elif p_norm.lower().startswith("z:\\"):
+        alt = "Z:\\neurobiology\\zimmer" + p_norm[2:]
+        try:
+            if os.path.exists(alt):
+                return alt
+        except Exception:
+            pass
+    return p
+
+
 def canonical_path(p: Optional[str]) -> str:
     """
     Returns a normalized, canonical absolute path representation.
     Ensures consistent forward/backslash handling, drive letter casing on Windows,
     and trailing slash stripping so paths compare identically in sets and dicts.
+    Pure string manipulation: no filesystem access (see ``resolve_existing_path``).
     """
     if not p:
         return ""
@@ -272,6 +313,94 @@ def canonical_path(p: Optional[str]) -> str:
     if len(norm) >= 2 and norm[1] == ":" and norm[0].isalpha():
         norm = norm[0].upper() + norm[1:]
     return norm
+
+
+def is_drive_root(p: str) -> bool:
+    """'C:\\' (scanning a whole drive because one recent project sits directly on it is never intended)"""
+    return os.path.splitdrive(p)[1] in ("", "\\", "/")
+
+
+REFERENCE_SOURCE = "Itamar"
+
+
+def recording_source(rec: dict) -> str:
+    """'Itamar' for recordings copied from Itamar's analysis (the annotation reference), otherwise 'Mine'"""
+    haystack = f"{rec.get('path', '')} {rec.get('name', '')}".lower()
+    return REFERENCE_SOURCE if "itamar" in haystack else "Mine"
+
+
+def clean_strain(strain: str) -> str:
+    """Folder names that start with a date used to yield strains like '2026'; those are not strains"""
+    strain = strain or ""
+    return "" if strain.isdigit() else strain
+
+
+NEURON_QUERY_PREFIXES = ("n:", "neuron:", "neurons:")
+
+
+def parse_neuron_query(text: str) -> Optional[List[str]]:
+    """'n:AVAL, RIML?' -> ['aval', 'riml'] (lower case, '?' stripped); None if this isn't a neuron query"""
+    text = (text or "").strip()
+    for prefix in NEURON_QUERY_PREFIXES:
+        if text.lower().startswith(prefix):
+            names = [n.replace("?", "").strip().lower() for n in text[len(prefix):].split(",")]
+            return [n for n in names if n]
+    return None
+
+
+def confident_neuron_names(rec: dict) -> set:
+    """Lower-case names that are annotated without a '?' (the ones usable as a reference)"""
+    return {str(n).lower() for n in rec.get("annotated_names", []) if n and "?" not in str(n)}
+
+
+def count_neuron_matches(rec: dict, wanted: List[str]) -> int:
+    have = confident_neuron_names(rec)
+    return sum(1 for n in wanted if n in have)
+
+
+def read_exposure_time(config_path: str) -> Optional[float]:
+    """
+    physical_units.exposure_time (ms) from project_config.yaml
+
+    The exposure time sets the volume rate (20 ms ~ 2.1 vol/s, 12 ms ~ 3.5 vol/s), so recordings with the same value
+    have the same time resolution and can be compared directly. Reads only the small yaml file.
+    """
+    try:
+        import yaml
+        if os.path.isdir(config_path):
+            config_path = os.path.join(config_path, "project_config.yaml")
+        with open(config_path, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        value = (cfg.get("physical_units") or {}).get("exposure_time")
+        return float(value) if value is not None else None
+    except Exception:
+        return None
+
+
+def acquisition_similarity(target: dict, rec: dict) -> tuple:
+    """Sort key: same exposure time (same frame rate) first, then the closest number of volumes"""
+    t_exp, r_exp = target.get("exposure_time"), rec.get("exposure_time")
+    same_rate = t_exp is not None and t_exp == r_exp
+    t_vol, r_vol = target.get("num_volumes"), rec.get("num_volumes")
+    diff = float(abs(t_vol - r_vol)) if t_vol and r_vol else float("inf")
+    return (0 if same_rate else 1, diff)
+
+
+def is_comparable(target: dict, rec: dict, tolerance: float = 0.35) -> bool:
+    """Same frame rate and a similar length (within ``tolerance`` of the target's number of volumes)"""
+    same_rate, diff = acquisition_similarity(target, rec)
+    t_vol = target.get("num_volumes")
+    return same_rate == 0 and bool(t_vol) and diff <= tolerance * t_vol
+
+
+def describe_acquisition(rec: dict) -> str:
+    """'1001 vol · 20 ms'"""
+    parts = []
+    if rec.get("num_volumes"):
+        parts.append(f"{rec['num_volumes']} vol")
+    if rec.get("exposure_time") is not None:
+        parts.append(f"{rec['exposure_time']:g} ms")
+    return " · ".join(parts)
 
 
 def get_project_fingerprint(project_dir: str) -> str:
@@ -499,6 +628,14 @@ def extract_metadata_for_project(project_dir: str, cache: Optional[Dict[str, Any
             cached["metadata"]["path"] = canonical_path(cached["metadata"].get("path", project_dir))
             if "config_path" in cached["metadata"]:
                 cached["metadata"]["config_path"] = canonical_path(cached["metadata"]["config_path"])
+            if "exposure_time" not in cached["metadata"]:
+                cached["metadata"]["exposure_time"] = read_exposure_time(
+                    cached["metadata"].get("config_path") or project_dir)
+            if "question_mark_count" not in cached["metadata"]:
+                qm = [d for d in cached["metadata"].get("annotated_details", []) if d.get("is_question_mark") or "?" in d.get("id1", "") or "?" in d.get("id2", "")]
+                cached["metadata"]["question_mark_count"] = len(qm)
+                cached["metadata"]["has_question_marks"] = len(qm) > 0
+                cached["metadata"]["question_mark_names"] = sorted(list({d.get("id1") for d in qm if d.get("id1")}))
             return cached["metadata"]
 
     cfg_candidate = canonical_path(os.path.join(project_dir, "project_config.yaml"))
@@ -510,6 +647,7 @@ def extract_metadata_for_project(project_dir: str, cache: Optional[Dict[str, Any
         "date": "",
         "strain": "",
         "num_volumes": None,
+        "exposure_time": None,
         "has_masks": False,
         "has_tracks": False,
         "has_traces": False,
@@ -517,6 +655,9 @@ def extract_metadata_for_project(project_dir: str, cache: Optional[Dict[str, Any
         "tracked_count": None,
         "annotated_count": 0,
         "annotated_total": 0,
+        "question_mark_count": 0,
+        "has_question_marks": False,
+        "question_mark_names": [],
         "annotated_names": [],
         "annotated_details": [],
         "is_fully_processed": False,
@@ -525,13 +666,15 @@ def extract_metadata_for_project(project_dir: str, cache: Optional[Dict[str, Any
         "excel_path": None,
     }
 
+    meta["exposure_time"] = read_exposure_time(cfg_candidate)
+
     # Parse Strain and Date from folder name
     strain_m = re.search(r"(AX\d+|ZIM\d+|N2)", name, re.IGNORECASE)
     if strain_m:
         meta["strain"] = strain_m.group(1).upper()
     else:
         parts = name.split("-")[0].split("_")
-        meta["strain"] = parts[0] if parts else ""
+        meta["strain"] = clean_strain(parts[0] if parts else "")
 
     date_m = re.search(r"(\d{4}-\d{2}-\d{2})", name)
     if date_m:
@@ -706,6 +849,7 @@ def extract_metadata_for_project(project_dir: str, cache: Optional[Dict[str, Any
                         if v.lower() not in ("nan", "none", ""):
                             notes = v
 
+                    has_qm = ("?" in id1) or ("?" in id2)
                     if id1 or id2:
                         if id1:
                             annotated_names_set.add(id1)
@@ -719,11 +863,17 @@ def extract_metadata_for_project(project_dir: str, cache: Optional[Dict[str, Any
                             "certainty": conf,
                             "comment": notes,
                             "notes": notes,
+                            "is_question_mark": has_qm,
                         })
 
                 meta["annotated_names"] = sorted(list(annotated_names_set))
                 meta["annotated_details"] = annotated_details
                 meta["annotated_count"] = len(annotated_details)
+
+                qm_details = [d for d in annotated_details if d.get("is_question_mark")]
+                meta["question_mark_count"] = len(qm_details)
+                meta["has_question_marks"] = len(qm_details) > 0
+                meta["question_mark_names"] = sorted(list({d.get("id1") for d in qm_details if d.get("id1")}))
         except Exception as e:
             logging.debug(f"Error reading annotations for {project_dir}: {e}")
 
@@ -759,13 +909,16 @@ class RecordingScannerWorker(QThread):
         self.recent_paths = recent_paths
         self.bypass_cache = bypass_cache
         self._is_stopped = False
-        self.cache = {} if bypass_cache else load_metadata_cache()
+        self.cache: Dict[str, Any] = {}
 
     def stop(self):
         self._is_stopped = True
         self.requestInterruption()
 
     def run(self):
+        # Parsing the cache canonicalises ~100 paths and reads ~1 MB: keep it off the UI thread
+        if not self.bypass_cache:
+            self.cache = load_metadata_cache()
         discovered_paths = set()
         projects_to_inspect = []
 
@@ -792,7 +945,7 @@ class RecordingScannerWorker(QThread):
                 date_str = date_m.group(1) if date_m else ""
 
                 strain_m = re.search(r"(AX\d+|ZIM\d+|N2)", name, re.IGNORECASE)
-                strain_str = strain_m.group(1).upper() if strain_m else (name.split("-")[0].split("_")[0] if name else "")
+                strain_str = strain_m.group(1).upper() if strain_m else clean_strain(name.split("-")[0].split("_")[0] if name else "")
 
                 # If in cache, yield cached right away
                 if (
@@ -819,6 +972,9 @@ class RecordingScannerWorker(QThread):
                         "tracked_count": None,
                         "annotated_count": 0,
                         "annotated_total": 0,
+                        "question_mark_count": 0,
+                        "has_question_marks": False,
+                        "question_mark_names": [],
                         "annotated_names": [],
                         "annotated_details": [],
                         "is_fully_processed": False,
@@ -831,7 +987,8 @@ class RecordingScannerWorker(QThread):
         # 2. Discover project directories in search roots (deduplicated)
         norm_roots = []
         for r in self.search_roots:
-            cr = canonical_path(r)
+            # Mount-spelling resolution does network stats: done here, on the worker thread.
+            cr = canonical_path(resolve_existing_path(canonical_path(r)))
             if cr and cr not in norm_roots:
                 norm_roots.append(cr)
 
@@ -860,7 +1017,7 @@ class RecordingScannerWorker(QThread):
                         date_str = date_m.group(1) if date_m else ""
 
                         strain_m = re.search(r"(AX\d+|ZIM\d+|N2)", name, re.IGNORECASE)
-                        strain_str = strain_m.group(1).upper() if strain_m else (name.split("-")[0].split("_")[0] if name else "")
+                        strain_str = strain_m.group(1).upper() if strain_m else clean_strain(name.split("-")[0].split("_")[0] if name else "")
 
                         if (
                             not self.bypass_cache
@@ -884,6 +1041,9 @@ class RecordingScannerWorker(QThread):
                                 "tracked_count": None,
                                 "annotated_count": 0,
                                 "annotated_total": 0,
+                                "question_mark_count": 0,
+                                "has_question_marks": False,
+                                "question_mark_names": [],
                                 "annotated_names": [],
                                 "annotated_details": [],
                                 "is_fully_processed": False,
@@ -920,7 +1080,7 @@ class RecordingScannerWorker(QThread):
                         date_str = date_m.group(1) if date_m else ""
 
                         strain_m = re.search(r"(AX\d+|ZIM\d+|N2)", name, re.IGNORECASE)
-                        strain_str = strain_m.group(1).upper() if strain_m else (name.split("-")[0].split("_")[0] if name else "")
+                        strain_str = strain_m.group(1).upper() if strain_m else clean_strain(name.split("-")[0].split("_")[0] if name else "")
 
                         # If in cache, emit cached info immediately
                         if (
@@ -945,6 +1105,9 @@ class RecordingScannerWorker(QThread):
                                 "tracked_count": None,
                                 "annotated_count": 0,
                                 "annotated_total": 0,
+                                "question_mark_count": 0,
+                                "has_question_marks": False,
+                                "question_mark_names": [],
                                 "annotated_names": [],
                                 "annotated_details": [],
                                 "is_fully_processed": False,
@@ -1185,6 +1348,32 @@ class QuickGlanceAnnotationDialog(QDialog):
         self.lbl_filter_count = QLabel(f"Showing {len(details)} of {len(details)}")
         self.lbl_filter_count.setStyleSheet("color: #7f848e; font-size: 11pt;")
         filter_box.addWidget(self.lbl_filter_count)
+
+        qm_count = self.record.get("question_mark_count", 0)
+        self.btn_toggle_qm = QPushButton(f"⚠️ Show '?' Only ({qm_count})")
+        self.btn_toggle_qm.setObjectName("actionButton")
+        self.btn_toggle_qm.setCheckable(True)
+        if qm_count > 0:
+            self.btn_toggle_qm.setStyleSheet("""
+                QPushButton {
+                    background-color: #3d311c;
+                    color: #e5c07b;
+                    border: 1px solid #9e7a3b;
+                    font-weight: bold;
+                }
+                QPushButton:checked {
+                    background-color: #e5c07b;
+                    color: #1e2227;
+                    border: 1px solid #ffd580;
+                }
+            """)
+            self.btn_toggle_qm.setToolTip("Show only uncertain '?' neurons transferred from ID pipeline")
+        else:
+            self.btn_toggle_qm.setEnabled(False)
+            self.btn_toggle_qm.setToolTip("No uncertain '?' neurons in this recording")
+        self.btn_toggle_qm.toggled.connect(self._apply_filter)
+        filter_box.addWidget(self.btn_toggle_qm)
+
         layout.addLayout(filter_box)
 
         # 3. Clean Searchable Table
@@ -1224,6 +1413,13 @@ class QuickGlanceAnnotationDialog(QDialog):
         self.btn_copy_ids.clicked.connect(self._copy_id_list)
         btn_layout.addWidget(self.btn_copy_ids)
 
+        self.btn_copy_qm = QPushButton("📋 Copy '?' List")
+        self.btn_copy_qm.setObjectName("actionButton")
+        self.btn_copy_qm.setEnabled(qm_count > 0)
+        self.btn_copy_qm.setToolTip("Copy comma-separated list of unconfirmed '?' neurons to clipboard")
+        self.btn_copy_qm.clicked.connect(self._copy_qm_list)
+        btn_layout.addWidget(self.btn_copy_qm)
+
         self.btn_open_excel = QPushButton("📂 Open manual_annotation.xlsx")
         self.btn_open_excel.setObjectName("actionButton")
         excel_path = self.record.get("excel_path")
@@ -1242,7 +1438,10 @@ class QuickGlanceAnnotationDialog(QDialog):
         layout.addLayout(btn_layout)
 
         if filter_text:
-            self.search_input.setText(filter_text)
+            if filter_text == "?":
+                self.btn_toggle_qm.setChecked(True)
+            else:
+                self.search_input.setText(filter_text)
 
     def _build_summary_text(self) -> str:
         details = self.record.get("annotated_details", [])
@@ -1253,7 +1452,9 @@ class QuickGlanceAnnotationDialog(QDialog):
         tc = self.record.get("tracked_count") or self.record.get("annotated_total", 0) or len(details)
         pct = (ac / tc * 100) if tc > 0 else 0.0
         classes = {n[:-1] if (n.endswith(('L', 'R')) and len(n) > 2) else n for n in names}
-        return f"Total Annotated: {ac} / {tc} tracked neurons ({pct:.1f}%) | Unique Classes: {len(classes)}"
+        qm_count = self.record.get("question_mark_count", 0)
+        qm_str = f" | Pending '?' Review: {qm_count}" if qm_count > 0 else ""
+        return f"Total Annotated: {ac} / {tc} tracked neurons ({pct:.1f}%) | Unique Classes: {len(classes)}{qm_str}"
 
     def _populate_table(self, details: List[Dict[str, Any]]):
         self.table.setSortingEnabled(False)
@@ -1264,22 +1465,21 @@ class QuickGlanceAnnotationDialog(QDialog):
             id2 = d.get("id2", "")
             conf = str(d.get("confidence", "") or d.get("certainty", "") or "")
             notes = str(d.get("comment", "") or d.get("notes", "") or "")
+            has_qm = bool(d.get("is_question_mark") or ("?" in id1) or ("?" in id2))
 
             m = re.search(r"(\d+)", track_id)
             t_sort = int(m.group(1)) if m else track_id
             item_track = SortableTableWidgetItem(track_id, sort_key=t_sort)
             item_track.setTextAlignment(Qt.AlignCenter)
             item_track.setFont(QFont("Consolas", 10))
-            self.table.setItem(r, 0, item_track)
 
             item_id1 = SortableTableWidgetItem(id1, sort_key=id1.lower())
             item_id1.setTextAlignment(Qt.AlignCenter)
             if id1:
-                item_id1.setForeground(QColor("#98c379"))
+                item_id1.setForeground(QColor("#e5c07b" if has_qm else "#98c379"))
                 item_id1.setFont(QFont("Segoe UI", 10, QFont.Bold))
             else:
                 item_id1.setForeground(QColor("#5c6370"))
-            self.table.setItem(r, 1, item_id1)
 
             item_id2 = SortableTableWidgetItem(id2, sort_key=id2.lower())
             item_id2.setTextAlignment(Qt.AlignCenter)
@@ -1287,24 +1487,44 @@ class QuickGlanceAnnotationDialog(QDialog):
                 item_id2.setForeground(QColor("#e5c07b"))
             else:
                 item_id2.setForeground(QColor("#5c6370"))
-            self.table.setItem(r, 2, item_id2)
 
             item_conf = SortableTableWidgetItem(conf, sort_key=conf)
             item_conf.setTextAlignment(Qt.AlignCenter)
             item_conf.setForeground(QColor("#abb2bf"))
-            self.table.setItem(r, 3, item_conf)
 
             item_notes = SortableTableWidgetItem(notes, sort_key=notes.lower())
             item_notes.setForeground(QColor("#abb2bf"))
+
+            if has_qm:
+                bg = QBrush(QColor("#2d2416"))
+                item_track.setBackground(bg)
+                item_id1.setBackground(bg)
+                item_id2.setBackground(bg)
+                item_conf.setBackground(bg)
+                item_notes.setBackground(bg)
+                item_id1.setToolTip("Unconfirmed '?' neuron from ID-transfer pipeline (needs manual review)")
+
+            self.table.setItem(r, 0, item_track)
+            self.table.setItem(r, 1, item_id1)
+            self.table.setItem(r, 2, item_id2)
+            self.table.setItem(r, 3, item_conf)
             self.table.setItem(r, 4, item_notes)
 
         self.table.setSortingEnabled(True)
 
     def _apply_filter(self):
         query = self.search_input.text().strip().lower()
+        qm_only = hasattr(self, "btn_toggle_qm") and self.btn_toggle_qm.isChecked()
         visible_count = 0
         total_count = self.table.rowCount()
         for r in range(total_count):
+            if qm_only:
+                id1_text = self.table.item(r, 1).text() if self.table.item(r, 1) else ""
+                id2_text = self.table.item(r, 2).text() if self.table.item(r, 2) else ""
+                if "?" not in id1_text and "?" not in id2_text:
+                    self.table.setRowHidden(r, True)
+                    continue
+
             if not query:
                 self.table.setRowHidden(r, False)
                 visible_count += 1
@@ -1330,6 +1550,17 @@ class QuickGlanceAnnotationDialog(QDialog):
         old_text = self.btn_copy_ids.text()
         self.btn_copy_ids.setText("✓ Copied!")
         QTimer.singleShot(1500, lambda: self.btn_copy_ids.setText(old_text))
+
+    def _copy_qm_list(self):
+        qm_names = self.record.get("question_mark_names", [])
+        if not qm_names:
+            details = self.record.get("annotated_details", [])
+            qm_names = sorted(list({d.get("id1") for d in details if d.get("is_question_mark") and d.get("id1")}))
+        text = ", ".join(qm_names)
+        QApplication.clipboard().setText(text)
+        old_text = self.btn_copy_qm.text()
+        self.btn_copy_qm.setText("✓ Copied '?' List!")
+        QTimer.singleShot(1500, lambda: self.btn_copy_qm.setText(old_text))
 
     def _open_excel(self):
         excel_path = self.record.get("excel_path")
@@ -1390,7 +1621,8 @@ class WBFMRecordingDashboard(QDialog):
         self.running_processes: List[Tuple[Any, str]] = []
 
         self.records_by_path: Dict[str, Dict[str, Any]] = {}
-        self.row_by_path: Dict[str, int] = {}
+        self.row_by_path: Dict[str, Any] = {}  # canonical path -> first-column QTableWidgetItem
+        self._similarity_target: Optional[dict] = None  # recording whose acquisition the neuron search ranks by
         self.active_strain_filter: str = "All"
         self.detected_strains: set = set()
 
@@ -1421,7 +1653,8 @@ class WBFMRecordingDashboard(QDialog):
             try:
                 p_dir = canonical_path(os.path.dirname(rp) if rp.lower().endswith(".yaml") else rp)
                 parent_dir = canonical_path(os.path.dirname(p_dir))
-                if os.path.exists(parent_dir) and parent_dir not in self.search_roots:
+                # Existence is checked by the scanner worker; no network stat on the UI thread.
+                if parent_dir and not is_drive_root(parent_dir) and parent_dir not in self.search_roots:
                     self.search_roots.append(parent_dir)
             except Exception:
                 pass
@@ -1464,7 +1697,7 @@ class WBFMRecordingDashboard(QDialog):
         # Search row
         search_row = QHBoxLayout()
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Filter recordings (Ctrl+F)...")
+        self.search_input.setPlaceholderText("Filter recordings (Ctrl+F)  •  find neurons: n:AVAL, RIML, AVAR")
         self.search_input.setClearButtonEnabled(True)
         self.search_input.textChanged.connect(self._apply_filters)
         search_row.addWidget(self.search_input, stretch=4)
@@ -1500,17 +1733,35 @@ class WBFMRecordingDashboard(QDialog):
         presets_row.addSpacing(10)
 
         # Presets Checkboxes
-        self.chk_processed_only = QCheckBox("Fully processed")
-        self.chk_processed_only.stateChanged.connect(self._apply_filters)
-        presets_row.addWidget(self.chk_processed_only)
+        self.chk_done_only = QCheckBox("✓ Done")
+        self.chk_done_only.setToolTip("Show only recordings that are fully processed with all IDs confirmed (0 pending ?)")
+        self.chk_done_only.stateChanged.connect(self._apply_filters)
+        presets_row.addWidget(self.chk_done_only)
+
+        self.chk_question_marks = QCheckBox("⚠️ Needs Review (?)")
+        self.chk_question_marks.setToolTip("Show only recordings that have unconfirmed '?' neurons from ID-transfer")
+        self.chk_question_marks.stateChanged.connect(self._apply_filters)
+        presets_row.addWidget(self.chk_question_marks)
 
         self.chk_missing_annotations = QCheckBox("Missing IDs")
+        self.chk_missing_annotations.setToolTip("Show recordings that are processed but missing neuron annotations")
         self.chk_missing_annotations.stateChanged.connect(self._apply_filters)
         presets_row.addWidget(self.chk_missing_annotations)
+
+        self.chk_processed_only = QCheckBox("All Processed")
+        self.chk_processed_only.stateChanged.connect(self._apply_filters)
+        presets_row.addWidget(self.chk_processed_only)
 
         self.chk_recent_only = QCheckBox("Recent")
         self.chk_recent_only.stateChanged.connect(self._apply_filters)
         presets_row.addWidget(self.chk_recent_only)
+
+        # Mine vs. Itamar's recordings (the annotated reference to compare against)
+        self.source_combo = QComboBox()
+        self.source_combo.addItems(["All sources", "Mine", REFERENCE_SOURCE])
+        self.source_combo.setToolTip("Show only your own recordings, or only Itamar's (the annotation reference)")
+        self.source_combo.currentIndexChanged.connect(self._apply_filters)
+        presets_row.addWidget(self.source_combo)
 
         presets_row.addStretch()
         filter_layout.addLayout(presets_row)
@@ -1721,6 +1972,46 @@ class WBFMRecordingDashboard(QDialog):
         self.insp_progress.setTextVisible(True)
         layout.addWidget(self.insp_progress)
 
+        # Unconfirmed '?' ID Alert Banner
+        self.frame_qm_alert = QFrame()
+        self.frame_qm_alert.setStyleSheet("""
+            QFrame {
+                background-color: #2b2214;
+                border: 1px solid #7c5c28;
+                border-radius: 6px;
+                padding: 2px 4px;
+            }
+        """)
+        qm_alert_layout = QHBoxLayout(self.frame_qm_alert)
+        qm_alert_layout.setContentsMargins(6, 4, 6, 4)
+        qm_alert_layout.setSpacing(6)
+
+        self.lbl_qm_alert = QLabel("⚠️ 0 pending review (?)")
+        self.lbl_qm_alert.setStyleSheet("color: #e5c07b; font-weight: bold; font-size: 10.5pt;")
+        qm_alert_layout.addWidget(self.lbl_qm_alert, stretch=1)
+
+        self.btn_qm_review = QPushButton("Review '?'")
+        self.btn_qm_review.setObjectName("actionButton")
+        self.btn_qm_review.setStyleSheet("""
+            QPushButton {
+                background-color: #3d311c;
+                color: #e5c07b;
+                border: 1px solid #9e7a3b;
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-weight: bold;
+                font-size: 10pt;
+            }
+            QPushButton:hover {
+                background-color: #524225;
+                color: #ffffff;
+            }
+        """)
+        self.btn_qm_review.clicked.connect(lambda: self._open_quick_glance_dialog(filter_text="?"))
+        qm_alert_layout.addWidget(self.btn_qm_review)
+        layout.addWidget(self.frame_qm_alert)
+        self.frame_qm_alert.setVisible(False)
+
         # Divider
         divider2 = QFrame()
         divider2.setFrameShape(QFrame.HLine)
@@ -1747,6 +2038,15 @@ class WBFMRecordingDashboard(QDialog):
         self.btn_quick_glance.setToolTip("Open full searchable neuron annotation viewer")
         self.btn_quick_glance.clicked.connect(self._on_quick_glance_clicked)
         layout.addWidget(self.btn_quick_glance)
+
+        # Jump to the reference (Itamar's) recordings that contain this recording's still-uncertain neurons
+        self.btn_find_reference = QPushButton("🔎 Find Itamar's recordings with these '?' neurons")
+        self.btn_find_reference.setEnabled(False)
+        self.btn_find_reference.setToolTip(
+            "Filters the list to Itamar's recordings that have this recording's '?' neurons annotated, "
+            "best match first (same as typing n:NAME1, NAME2 in the search box)")
+        self.btn_find_reference.clicked.connect(self._on_find_reference_clicked)
+        layout.addWidget(self.btn_find_reference)
 
         # Mini Filter
         self.ann_filter_input = QLineEdit()
@@ -1903,21 +2203,30 @@ class WBFMRecordingDashboard(QDialog):
         self.scanner_thread.scan_finished.connect(self._on_scan_finished)
         self.scanner_thread.start()
 
-    def stop_scanner(self):
+    def stop_scanner(self, wait: bool = True):
+        """Stop the scanner. With ``wait=False`` (F5 refresh) the UI never blocks on a stuck
+        network call: the old thread is detached from the UI and kept alive until it exits."""
         if hasattr(self, "scanner_thread") and self.scanner_thread is not None:
-            if self.scanner_thread.isRunning():
-                self.scanner_thread.stop()
+            thread = self.scanner_thread
+            if thread.isRunning():
+                thread.stop()
                 try:
-                    self.scanner_thread.recording_discovered.disconnect()
-                    self.scanner_thread.recording_updated.disconnect()
-                    self.scanner_thread.scan_progress.disconnect()
-                    self.scanner_thread.scan_finished.disconnect()
+                    thread.recording_discovered.disconnect()
+                    thread.recording_updated.disconnect()
+                    thread.scan_progress.disconnect()
+                    thread.scan_finished.disconnect()
                 except Exception:
                     pass
-                self.scanner_thread.wait(2000)
+                if wait:
+                    thread.wait(2000)
+                if thread.isRunning():
+                    # Keep a reference so Qt doesn't destroy a running QThread
+                    retired = self.__dict__.setdefault("_retired_scanners", [])
+                    retired.append(thread)
+                    thread.finished.connect(lambda t=thread: retired.remove(t) if t in retired else None)
 
     def _restart_scanner(self):
-        self.stop_scanner()
+        self.stop_scanner(wait=False)
 
         prev_selection = self.selected_project_path
 
@@ -1941,7 +2250,8 @@ class WBFMRecordingDashboard(QDialog):
             try:
                 p_dir = canonical_path(os.path.dirname(rp) if rp.lower().endswith(".yaml") else rp)
                 parent_dir = canonical_path(os.path.dirname(p_dir))
-                if os.path.exists(parent_dir) and parent_dir not in self.search_roots:
+                # Existence is checked by the scanner worker; no network stat on the UI thread.
+                if parent_dir and not is_drive_root(parent_dir) and parent_dir not in self.search_roots:
                     self.search_roots.append(parent_dir)
             except Exception:
                 pass
@@ -1990,6 +2300,7 @@ class WBFMRecordingDashboard(QDialog):
             return
 
         self.records_by_path[path] = record
+        record["strain"] = clean_strain(record.get("strain", ""))
         strain = record.get("strain")
         if strain and strain not in self.detected_strains:
             self.detected_strains.add(strain)
@@ -2000,13 +2311,12 @@ class WBFMRecordingDashboard(QDialog):
 
         row = self.table.rowCount()
         self.table.insertRow(row)
-        self.row_by_path[path] = row
 
         self._populate_row(row, record)
         self._apply_row_filter(row)
 
         self.table.setSortingEnabled(sorting)
-        self._update_counts()
+        self._schedule_update_counts()
 
         if self.selected_project_path and canonical_path(self.selected_project_path) in (
             path, canonical_path(record.get("config_path", ""))
@@ -2025,17 +2335,14 @@ class WBFMRecordingDashboard(QDialog):
             record["config_path"] = canonical_path(record["config_path"])
 
         self.records_by_path[path] = record
+        record["strain"] = clean_strain(record.get("strain", ""))
         strain = record.get("strain")
         if strain and strain not in self.detected_strains:
             self.detected_strains.add(strain)
             self._rebuild_strain_chips()
 
-        target_row = -1
-        for r in range(self.table.rowCount()):
-            item = self.table.item(r, 0)
-            if item and canonical_path(item.data(Qt.UserRole)) == path:
-                target_row = r
-                break
+        existing_item = self.row_by_path.get(path)
+        target_row = existing_item.row() if existing_item is not None else -1
 
         if target_row >= 0:
             sorting = self.table.isSortingEnabled()
@@ -2044,9 +2351,11 @@ class WBFMRecordingDashboard(QDialog):
             self._apply_row_filter(target_row)
             self.table.setSortingEnabled(sorting)
         else:
+            # Not in the table yet: let the discovery slot insert the row (it skips known paths)
+            self.records_by_path.pop(path, None)
             self._on_recording_discovered(record)
 
-        self._update_counts()
+        self._schedule_update_counts()
 
         # Update inspector if this is selected
         if self.selected_project_path and canonical_path(self.selected_project_path) in (
@@ -2084,7 +2393,13 @@ class WBFMRecordingDashboard(QDialog):
         canon_path = canonical_path(rec.get("path", ""))
         name_item.setData(Qt.UserRole, canon_path)
         name_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        name_item.setForeground(QColor("#e5c07b" if rec.get("is_recent") else "#ffffff"))
+        if rec.get("is_recent"):
+            name_color = "#e5c07b"
+        elif recording_source(rec) == REFERENCE_SOURCE:
+            name_color = "#61afef"  # Itamar's recordings (annotation reference)
+        else:
+            name_color = "#ffffff"
+        name_item.setForeground(QColor(name_color))
         tip_parts = [rec.get("name", "")]
         if rec.get("is_recent"):
             tip_parts.append("(Recent Project)")
@@ -2093,6 +2408,7 @@ class WBFMRecordingDashboard(QDialog):
             tip_parts.append(f"Config: {canonical_path(rec['config_path'])}")
         name_item.setToolTip("\n".join(tip_parts))
         self.table.setItem(row, 0, name_item)
+        self.row_by_path[canon_path] = name_item  # item.row() stays correct across sorting
 
         # Col 1: Date
         date_str = rec.get("date", "")
@@ -2135,15 +2451,34 @@ class WBFMRecordingDashboard(QDialog):
         # Col 7: ID'd Neurons Count
         ac = rec.get("annotated_count", 0)
         at = rec.get("annotated_total", 0)
+        qm = rec.get("question_mark_count", 0)
+        is_done = rec.get("is_fully_processed", False) and ac > 0 and qm == 0
         ann_names = rec.get("annotated_names", [])
         if at > 0 or ac > 0:
-            ann_text = f"{ac} / {at}" if at > 0 else f"{ac}"
-            ann_sort = ac
-            ann_color = "#98c379" if ac > 0 else "#e06c75"
-            if ann_names:
-                ann_tip = f"{ac} annotated neurons ({len(ann_names)} unique identities)\nDouble-click to open Quick Glance viewer"
+            if qm > 0:
+                ann_text = f"⚠️ {ac} / {at}  ({qm}?)" if at > 0 else f"⚠️ {ac}  ({qm}?)"
+                ann_color = "#e5c07b"
+                ann_tip = (
+                    f"⚠️ NEEDS MANUAL REVIEW:\n"
+                    f"• {qm} unconfirmed (?) neuron IDs pending review\n"
+                    f"• {ac - qm} confirmed IDs\n"
+                    f"Double-click to open Quick Glance review dialog"
+                )
+            elif is_done:
+                ann_text = f"✓ {ac} / {at}" if at > 0 else f"✓ {ac}"
+                ann_color = "#98c379"
+                ann_tip = (
+                    f"✓ DONE: All {ac} neuron IDs confirmed (0 pending review)\n"
+                    f"Double-click to open Quick Glance viewer"
+                )
             else:
-                ann_tip = f"{ac} of {at} neurons annotated\nDouble-click to open Quick Glance viewer"
+                ann_text = f"{ac} / {at}" if at > 0 else f"{ac}"
+                ann_color = "#98c379" if ac > 0 else "#e06c75"
+                if ann_names:
+                    ann_tip = f"{ac} annotated neurons ({len(ann_names)} unique identities)\nDouble-click to open Quick Glance viewer"
+                else:
+                    ann_tip = f"{ac} of {at} neurons annotated\nDouble-click to open Quick Glance viewer"
+            ann_sort = ac
         else:
             ann_text = "-"
             ann_sort = -1
@@ -2154,6 +2489,10 @@ class WBFMRecordingDashboard(QDialog):
         ann_item.setForeground(QColor(ann_color))
         if ac > 0:
             ann_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        if qm > 0:
+            ann_item.setBackground(QBrush(QColor("#352914")))
+        elif is_done:
+            ann_item.setBackground(QBrush(QColor("#182b1d")))
         ann_item.setToolTip(ann_tip)
         self.table.setItem(row, 7, ann_item)
 
@@ -2175,6 +2514,41 @@ class WBFMRecordingDashboard(QDialog):
                 self.table.setRowHidden(row, True)
                 return
 
+        # Source filter (mine / Itamar's)
+        if hasattr(self, "source_combo") and self.source_combo.currentIndex() > 0:
+            if recording_source(rec) != self.source_combo.currentText():
+                self.table.setRowHidden(row, True)
+                return
+
+        # Neuron query, e.g. "n:AVAL, RIML": keep recordings that have any of them, ranked by how many
+        wanted = parse_neuron_query(query)
+        base_name = rec.get("name", "")
+        if wanted is not None:
+            n_match = count_neuron_matches(rec, wanted) if wanted else 0
+            target = self._similarity_target
+            if wanted and n_match > 0:
+                label = f"{base_name}   ✓ {n_match}/{len(wanted)}"
+                detail = describe_acquisition(rec)
+                if detail:
+                    label += f" · {detail}"
+                if target and is_comparable(target, rec):
+                    label += " · ≈ comparable"
+                item0.setText(label)
+                # Most requested neurons first; then same frame rate; then closest length
+                item0.sort_key = (-n_match,) + (acquisition_similarity(target, rec) if target else (0, 0.0)) \
+                    + (base_name.lower(),)
+            else:
+                item0.setText(base_name)
+                item0.sort_key = (0, 1, float("inf"), base_name.lower())
+                if wanted:
+                    self.table.setRowHidden(row, True)
+                    return
+            query = ""  # fully handled; don't also substring-match the "n:..." text below
+        elif item0.text() != base_name:
+            # Leaving neuron-query mode: restore the plain name and sort key
+            item0.setText(base_name)
+            item0.sort_key = base_name.lower()
+
         # Query filter
         if query:
             match_name = query in rec.get("name", "").lower()
@@ -2183,6 +2557,13 @@ class WBFMRecordingDashboard(QDialog):
             match_path = query in rec.get("path", "").lower()
             match_ann = any(query in name.lower() for name in rec.get("annotated_names", []))
             if not (match_name or match_strain or match_date or match_path or match_ann):
+                self.table.setRowHidden(row, True)
+                return
+
+        # Preset: Done Only (Processed + Annotations exist + 0 pending '?')
+        if hasattr(self, "chk_done_only") and self.chk_done_only.isChecked():
+            is_done = rec.get("is_fully_processed", False) and rec.get("annotated_count", 0) > 0 and rec.get("question_mark_count", 0) == 0
+            if not is_done:
                 self.table.setRowHidden(row, True)
                 return
 
@@ -2198,6 +2579,12 @@ class WBFMRecordingDashboard(QDialog):
                 self.table.setRowHidden(row, True)
                 return
 
+        # Preset: Has '?' IDs (Needs Manual Review)
+        if hasattr(self, "chk_question_marks") and self.chk_question_marks.isChecked():
+            if rec.get("question_mark_count", 0) <= 0:
+                self.table.setRowHidden(row, True)
+                return
+
         # Preset: Recent Only
         if self.chk_recent_only.isChecked():
             if not rec.get("is_recent", False):
@@ -2207,14 +2594,51 @@ class WBFMRecordingDashboard(QDialog):
         self.table.setRowHidden(row, False)
 
     def _apply_filters(self):
-        for r in range(self.table.rowCount()):
-            self._apply_row_filter(r)
+        # Row text / sort keys change while filtering: keep the table from re-sorting under the loop
+        sorting = self.table.isSortingEnabled()
+        self.table.setSortingEnabled(False)
+        try:
+            for r in range(self.table.rowCount()):
+                self._apply_row_filter(r)
+        finally:
+            self.table.setSortingEnabled(sorting)
+        if parse_neuron_query(self.search_input.text()):
+            # Best matches (most of the requested neurons) first
+            self.table.sortItems(0, Qt.AscendingOrder)
+        else:
+            self._similarity_target = None
         self._update_counts()
+
+    def _schedule_update_counts(self):
+        """Coalesce bursts of per-record updates (scanner emits one per project) into one refresh."""
+        if getattr(self, "_counts_timer", None) is None:
+            self._counts_timer = QTimer(self)
+            self._counts_timer.setSingleShot(True)
+            self._counts_timer.setInterval(150)
+            self._counts_timer.timeout.connect(self._update_counts)
+        if not self._counts_timer.isActive():
+            self._counts_timer.start()
 
     def _update_counts(self):
         total = self.table.rowCount()
         visible = sum(1 for r in range(total) if not self.table.isRowHidden(r))
-        self.badge_count_label.setText(f"Showing {visible} of {total} recordings")
+        all_recs = list(self.records_by_path.values())
+        count_done = sum(1 for r in all_recs if r.get("is_fully_processed") and r.get("annotated_count", 0) > 0 and r.get("question_mark_count", 0) == 0)
+        count_qm = sum(1 for r in all_recs if r.get("question_mark_count", 0) > 0)
+        count_missing = sum(1 for r in all_recs if r.get("is_fully_processed") and r.get("annotated_count", 0) == 0)
+
+        if hasattr(self, "chk_done_only"):
+            self.chk_done_only.setText(f"✓ Done ({count_done})")
+        if hasattr(self, "chk_question_marks"):
+            self.chk_question_marks.setText(f"⚠️ Needs Review ({count_qm})")
+        if hasattr(self, "chk_missing_annotations"):
+            self.chk_missing_annotations.setText(f"Missing IDs ({count_missing})")
+
+        self.badge_count_label.setText(
+            f"Showing {visible} of {total} recordings  •  "
+            f"<span style='color: #98c379; font-weight: bold;'>{count_done} Done</span>  •  "
+            f"<span style='color: #e5c07b; font-weight: bold;'>{count_qm} Need Review (?)</span>"
+        )
 
     # --------------------------------------------------------------------------
     # Inspector Sidebar Updates
@@ -2233,6 +2657,7 @@ class WBFMRecordingDashboard(QDialog):
             self.lbl_bilateral_summary.setText("")
             self.btn_quick_glance.setText("🔍 View Annotated Neurons")
             self.btn_quick_glance.setEnabled(False)
+            self.btn_find_reference.setEnabled(False)
             self.ann_filter_input.clear()
             self._clear_sidebar_badges()
             for k, lbl in self.chk_labels.items():
@@ -2242,6 +2667,8 @@ class WBFMRecordingDashboard(QDialog):
             self.btn_open_excel.setEnabled(False)
             self.btn_open_cfg.setEnabled(False)
             self.btn_copy_path.setEnabled(False)
+            if hasattr(self, "frame_qm_alert"):
+                self.frame_qm_alert.setVisible(False)
             return
 
         self.selected_record = rec
@@ -2269,6 +2696,42 @@ class WBFMRecordingDashboard(QDialog):
         self.lbl_insp_ann_stats.setText(f"{ac} / {at} ({pct:.1f}%)")
         self.insp_progress.setValue(int(pct))
 
+        # Status / Review Alert
+        qm_count = rec.get("question_mark_count", 0)
+        is_done = rec.get("is_fully_processed", False) and ac > 0 and qm_count == 0
+        if hasattr(self, "frame_qm_alert"):
+            if qm_count > 0:
+                self.frame_qm_alert.setStyleSheet("""
+                    QFrame {
+                        background-color: #2b2214;
+                        border: 1px solid #7c5c28;
+                        border-radius: 6px;
+                        padding: 3px 6px;
+                    }
+                """)
+                self.lbl_qm_alert.setText(f"⚠️ Needs Review ({qm_count} ? IDs)")
+                self.lbl_qm_alert.setStyleSheet("color: #e5c07b; font-weight: bold; font-size: 10.5pt;")
+                self.lbl_qm_alert.setToolTip(f"{qm_count} neurons from ID-transfer have uncertain '?' labels needing review")
+                self.btn_qm_review.setText(f"Review '?' ({qm_count})")
+                self.btn_qm_review.setVisible(True)
+                self.frame_qm_alert.setVisible(True)
+            elif is_done:
+                self.frame_qm_alert.setStyleSheet("""
+                    QFrame {
+                        background-color: #172b1d;
+                        border: 1px solid #2e7d32;
+                        border-radius: 6px;
+                        padding: 3px 6px;
+                    }
+                """)
+                self.lbl_qm_alert.setText("✓ Complete & Confirmed")
+                self.lbl_qm_alert.setStyleSheet("color: #98c379; font-weight: bold; font-size: 10.5pt;")
+                self.lbl_qm_alert.setToolTip("All neuron IDs in this recording are confirmed (0 pending review)")
+                self.btn_qm_review.setVisible(False)
+                self.frame_qm_alert.setVisible(True)
+            else:
+                self.frame_qm_alert.setVisible(False)
+
         # Annotated Identities & Quick Glance Pane
         ann_names = rec.get("annotated_names", [])
         ann_details = rec.get("annotated_details", [])
@@ -2281,6 +2744,7 @@ class WBFMRecordingDashboard(QDialog):
 
         has_ann_or_excel = (len(ann_names) > 0 or len(ann_details) > 0 or bool(rec.get("excel_path")))
         self.btn_quick_glance.setEnabled(has_ann_or_excel)
+        self.btn_find_reference.setEnabled(bool(self._question_mark_query_names(rec)))
         if len(ann_names) > 0:
             self.btn_quick_glance.setText(f"🔍 View Annotated Neurons ({len(ann_names)})")
         elif len(ann_details) > 0:
@@ -2337,6 +2801,7 @@ class WBFMRecordingDashboard(QDialog):
                 name_to_tracks.setdefault(id2, []).append(t)
 
         for name in ann_names:
+            is_qm = "?" in name
             tracks = name_to_tracks.get(name, [])
             if tracks:
                 tip = f"{', '.join(tracks)} -> {name}\n(Click to inspect in Quick Glance)"
@@ -2344,7 +2809,27 @@ class WBFMRecordingDashboard(QDialog):
                 tip = f"{name}\n(Click to inspect in Quick Glance)"
 
             chip = QPushButton(name)
-            chip.setObjectName("badgeChip")
+            if is_qm:
+                chip.setStyleSheet("""
+                    QPushButton {
+                        background-color: #3d311c;
+                        color: #e5c07b;
+                        border: 1px solid #9e7a3b;
+                        border-radius: 4px;
+                        padding: 2px 6px;
+                        font-size: 11pt;
+                        font-weight: bold;
+                        min-height: 18px;
+                    }
+                    QPushButton:hover {
+                        background-color: #524225;
+                        border-color: #e5c07b;
+                        color: #ffffff;
+                    }
+                """)
+                tip = f"[UNCONFIRMED ID (?)]\n{tip}"
+            else:
+                chip.setObjectName("badgeChip")
             chip.setToolTip(tip)
             chip.setCursor(Qt.PointingHandCursor)
             chip.clicked.connect(lambda checked=False, n=name: self._open_quick_glance_dialog(filter_text=n))
@@ -2355,6 +2840,22 @@ class WBFMRecordingDashboard(QDialog):
         query = text.strip().lower()
         for name, chip in self.ann_badges:
             chip.setVisible(query in name.lower() if query else True)
+
+    @staticmethod
+    def _question_mark_query_names(rec: Optional[dict]) -> List[str]:
+        """The proposed names ('?' stripped) of a recording's uncertain neurons"""
+        names = {str(n).replace("?", "").strip() for n in (rec or {}).get("question_mark_names", [])}
+        return sorted(n for n in names if n)
+
+    def _on_find_reference_clicked(self):
+        names = self._question_mark_query_names(self.selected_record)
+        if not names:
+            return
+        # Changing the combo already runs a filter pass (which clears the target while no neuron query is active),
+        # so set the target last, right before the query that uses it
+        self.source_combo.setCurrentText(REFERENCE_SOURCE)
+        self._similarity_target = dict(self.selected_record)  # rank by similar frame rate / length as well
+        self.search_input.setText("n:" + ", ".join(names))  # textChanged re-applies the filters
 
     def _on_quick_glance_clicked(self):
         if self.selected_record:
@@ -2540,7 +3041,7 @@ class WBFMRecordingDashboard(QDialog):
         if not project_path:
             return
 
-        project_path = canonical_path(project_path)
+        project_path = canonical_path(resolve_existing_path(canonical_path(project_path)))
 
         # Resolve directory to config yaml if present
         if os.path.isdir(project_path):
@@ -2669,7 +3170,7 @@ def main():
             load_tracklets = False
 
     if project_path:
-        project_path = canonical_path(project_path)
+        project_path = canonical_path(resolve_existing_path(canonical_path(project_path)))
         if os.path.isdir(project_path):
             candidate = os.path.join(project_path, "project_config.yaml")
             if os.path.exists(candidate):

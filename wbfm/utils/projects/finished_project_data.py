@@ -1940,8 +1940,7 @@ class ProjectData:
             self.df_manual_tracking_fname = ''
             return None
         possible_fnames = {k: str(v) for k, v in possible_fnames.items()}
-        # fname_precedence = ['excel', 'csv', 'h5']  # This precedence is used because humans may have added things
-        fname_precedence = ['newest']
+        fname_precedence = ['newest', 'excel', 'h5', 'h5_backup', 'csv']
         try:
             df_manual_tracking, fname = load_file_according_to_precedence(fname_precedence, possible_fnames,
                                                                           reader_func=read_if_exists, na_filter=False)
@@ -1984,6 +1983,83 @@ class ProjectData:
                                                           prepend_subfolder=True)
         return excel_fname
 
+    ID_TRANSFER_RELATIVE_FNAMES = ("id_transfer_output/hungarian/manual_annotation.xlsx",
+                                   "hungarian/manual_annotation.xlsx")
+
+    def id_transfer_annotation_fname(self) -> Optional[str]:
+        """First existing ID-transfer output (relative to the tracking folder), or None"""
+        try:
+            track_cfg = self.project_config.get_tracking_config()
+            for rel in self.ID_TRANSFER_RELATIVE_FNAMES:
+                candidate = track_cfg.resolve_relative_path(rel, prepend_subfolder=True)
+                if candidate and Path(candidate).exists():
+                    return str(candidate)
+        except Exception as e:
+            self.logger.debug(f"No ID-transfer output found: {e}")
+        return None
+
+    @staticmethod
+    def _annotations_are_blank(df: pd.DataFrame) -> bool:
+        """True if no neuron has been given a name yet (ID1 empty or equal to 'Neuron ID', no ID2)"""
+        if df is None or 'Neuron ID' not in df.columns or 'ID1' not in df.columns:
+            return False
+        orig = df['Neuron ID'].astype(str)
+        id1 = df['ID1'].astype(str).str.strip().replace('nan', '')
+        named = (id1 != '') & (id1 != orig)
+        if 'ID2' in df.columns:
+            named |= df['ID2'].astype(str).str.strip().replace('nan', '') != ''
+        # Other traces of manual work: rejected proposals (kept in Notes), certainty set, marked finished
+        if 'Notes' in df.columns:
+            named |= df['Notes'].astype(str).str.contains('rejected', case=False, regex=False)
+        if 'Certainty' in df.columns:
+            named |= pd.to_numeric(df['Certainty'], errors='coerce').fillna(0) > 0
+        if 'Finished?' in df.columns:
+            named |= df['Finished?'].astype(str).str.strip().replace('nan', '') != ''
+        return not bool(named.any())
+
+    def _merge_id_transfer_proposals(self, df_default: pd.DataFrame) -> pd.DataFrame:
+        """
+        Copy the ID-transfer proposals (ID1/ID2/Certainty/Notes, matched on 'Neuron ID') into the default dataframe
+
+        Returns the default dataframe unchanged if there is no usable transfer output.
+        """
+        fname = self.id_transfer_annotation_fname()
+        if fname is None:
+            return df_default
+        try:
+            df_transfer = pd.read_excel(fname, na_filter=False)
+        except Exception as e:
+            self.logger.warning(f"Found ID-transfer output ({fname}) but could not read it: {e}")
+            return df_default
+        # Columns are matched case-insensitively
+        lower = {str(c).strip().lower(): c for c in df_transfer.columns}
+        id_col = lower.get('neuron id')
+        if id_col is None or lower.get('id1') is None:
+            self.logger.warning(f"ID-transfer output ({fname}) has no 'Neuron ID'/'ID1' columns; ignoring it")
+            return df_default
+        df_transfer = df_transfer.copy()
+        df_transfer[id_col] = df_transfer[id_col].astype(str)
+        known = set(df_default['Neuron ID'].astype(str))
+        n_match = df_transfer[id_col].isin(known).sum()
+        if n_match == 0:
+            self.logger.warning(f"ID-transfer output ({fname}) has no neurons matching this project; ignoring it")
+            return df_default
+
+        df = df_default.copy()
+        df['Neuron ID'] = df['Neuron ID'].astype(str)
+        for col in ['ID1', 'ID2', 'Certainty', 'Notes']:
+            src = lower.get(col.lower())
+            if src is None:
+                continue
+            mapping = dict(zip(df_transfer[id_col], df_transfer[src]))
+            if col not in df.columns:
+                df[col] = ''
+            df[col] = df['Neuron ID'].map(mapping).where(df['Neuron ID'].isin(mapping.keys()), df[col])
+        n_uncertain = int(df['ID1'].astype(str).str.contains('?', regex=False).sum())
+        self.logger.info(f"Initialized IDs from ID-transfer output ({fname}): {n_match} neurons, "
+                         f"{n_uncertain} uncertain ('?')")
+        return df
+
     def build_neuron_editor_gui(self, neuropal_subproject=False) -> Optional['NeuronNameEditor']:
         """
         Initialize a QT table interface for editing neurons
@@ -2010,6 +2086,10 @@ class ProjectData:
                 fname = self.get_default_manual_annotation_fname(neuropal_subproject=neuropal_subproject)
             except IncompleteConfigFileError:
                 return None
+            if not neuropal_subproject:
+                # No annotations yet: start from the ID-transfer proposals (with '?' for uncertain ones), if any.
+                # They are only copied into this dataframe; the transfer file itself is never modified.
+                df = self._merge_id_transfer_proposals(df)
         else:
             # Ensure formatting of output name
             if neuropal_subproject:
@@ -2022,6 +2102,10 @@ class ProjectData:
                 self.logger.warning(f"Found manual annotation file at ({fname})")
                 fname = str(Path(fname).with_suffix('.xlsx'))
                 self.logger.warning(f", but will save as excel file at ({fname})")
+
+            if not neuropal_subproject and self._annotations_are_blank(df):
+                # A blank annotation file (e.g. auto-created on a previous open) must not hide the ID-transfer proposals
+                df = self._merge_id_transfer_proposals(df)
 
         # Enforce certain datatypes
         df['Neuron ID'] = df['Neuron ID'].astype(str)
@@ -2056,11 +2140,14 @@ class ProjectData:
             manual_neuron_name_editor = NeuronNameEditor(neurons_to_id=neurons_to_id)
             manual_neuron_name_editor.import_dataframe(df, fname)
             # Create a backup excel file in the same folder, in case of corruption
-            fname_backup = add_name_suffix(fname, '_backup')
-            df.to_excel(fname_backup, index=False)
+            try:
+                fname_backup = add_name_suffix(fname, '_backup')
+                df.to_excel(fname_backup, index=False)
+            except Exception as e:
+                self.logger.warning(f"Could not save backup excel file ({fname}): {e}")
 
-        except (PermissionError, tables.exceptions.HDF5ExtError):
-            self.logger.warning(f"Could not open manual annotation file at ({fname}); "
+        except (PermissionError, tables.exceptions.HDF5ExtError, OSError) as e:
+            self.logger.warning(f"Could not open manual annotation file at ({fname}): {e}; "
                                 f"will not be able to save, thus this GUI will not be opened")
             manual_neuron_name_editor = None
 

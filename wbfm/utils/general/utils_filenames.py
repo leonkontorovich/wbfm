@@ -65,12 +65,12 @@ def resolve_mounted_path_in_current_os(raw_path: str, allow_only_parent_to_exist
     # Last updated: Oct 2025
     mounted_drive_pairs = [
         ('Y:', "/groups/zimmer"),
-        ('Z:', "/lisc/data/scratch"),
-        ('Z:', "/lisc/data/scratch/neurobiology"),
         ('Z:', "/lisc/data/scratch/neurobiology/zimmer"),
-        ('S:', "/lisc/data/scratch"),
-        ('S:', "/lisc/data/scratch/neurobiology"),
+        ('Z:', "/lisc/data/scratch/neurobiology"),
+        ('Z:', "/lisc/data/scratch"),
         ('S:', "/lisc/data/scratch/neurobiology/zimmer"),
+        ('S:', "/lisc/data/scratch/neurobiology"),
+        ('S:', "/lisc/data/scratch"),
         (r'//samba.lisc.univie.ac.at/scratch', "/lisc/data/scratch"),  # Mac
         ('/lisc/scratch', "/lisc/data/scratch")
     ]
@@ -95,11 +95,20 @@ def resolve_mounted_path_in_current_os(raw_path: str, allow_only_parent_to_exist
                     if verbose >= 2:
                         print(f"Converted linux style path {raw_path} to linux style {path}")
                     
-            elif machine_is_windows and path_is_linux_style:
-                path = raw_path.replace(linux_drive, win_drive)
-                path = str(Path(path).resolve())
-                if verbose >= 2:
-                    print(f"Converted linux style path {raw_path} to windows style {path}")
+            elif machine_is_windows:
+                if path_is_linux_style:
+                    path = raw_path.replace(linux_drive, win_drive)
+                    path = str(Path(path).resolve())
+                    if verbose >= 2:
+                        print(f"Converted linux style path {raw_path} to windows style {path}")
+                elif path_is_windows_style:
+                    norm_raw = raw_path.replace("/", "\\")
+                    if norm_raw.lower().startswith("z:\\neurobiology\\zimmer"):
+                        path = "Z:" + norm_raw[len("z:\\neurobiology\\zimmer"):]
+                    elif norm_raw.lower().startswith("z:\\"):
+                        path = "Z:\\neurobiology\\zimmer" + norm_raw[2:]
+                    if path:
+                        path = str(Path(path).resolve())
             else:
                 if verbose >= 2:
                     print(f"No conversion needed for path {raw_path} on os {os.name}")
@@ -183,9 +192,13 @@ def read_if_exists(filename: str, reader=pandas_read_any_filetype, raise_warning
         output = None
     elif os.path.exists(filename):
         try:
-            output = reader(filename, **kwargs)
-        except UnicodeDecodeError:
-            logging.warning(f"Encountered unicode error; aborting read of {filename}")
+            if os.path.isfile(filename) and os.path.getsize(filename) == 0:
+                logging.warning(f"File {filename} is 0 bytes (empty or corrupt); skipping")
+                output = None
+            else:
+                output = reader(filename, **kwargs)
+        except Exception as e:
+            logging.warning(f"Error reading file {filename}: {e}; skipping")
             output = None
     else:
         output = None
@@ -267,6 +280,9 @@ def load_file_according_to_precedence(fname_precedence: list,
                         continue
                     else:
                         raise e
+                if data is None and recover_from_errors:
+                    logging.warning(f"File {fname} yielded no data; falling back to next candidate")
+                    continue
                 logging.debug(f"Read data from: {fname}")
 
             if key != most_recent_modified_key:

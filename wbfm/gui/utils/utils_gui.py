@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import os
 import subprocess
@@ -9,9 +10,12 @@ import numpy as np
 import pandas as pd
 from PyQt5 import QtGui
 from PyQt5.QtCore import pyqtSignal, Qt, QItemSelectionModel
-from PyQt5.QtWidgets import QComboBox, QVBoxLayout, QMessageBox, QStyledItemDelegate
-from PyQt5.QtWidgets import QApplication, QWidget, QGridLayout, QTableView, QAbstractItemView, QListWidget, QLabel, QPushButton
-from PyQt5.QtGui import QStandardItemModel, QStandardItem
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QGridLayout, QVBoxLayout, QTableView,
+    QAbstractItemView, QListWidget, QListWidgetItem, QLabel, QPushButton,
+    QComboBox, QMessageBox, QStyledItemDelegate, QTabWidget, QDockWidget
+)
+from PyQt5.QtGui import QStandardItemModel, QStandardItem, QColor
 
 
 def _fix_dimension_for_plt(crop_sz, dat_crop):
@@ -312,6 +316,9 @@ class NeuronNameEditor(QWidget):
 
         # Save options
         self.neurons_to_id = neurons_to_id
+        self.last_save_error = None
+        # (neuron id, old ID1, old Certainty, old Notes) per accept/reject/correct, for undo
+        self._review_undo_stack = []
 
         # Set up the GUI
         layout = QGridLayout()
@@ -338,15 +345,18 @@ class NeuronNameEditor(QWidget):
         layout.setRowStretch(2, 1)
 
         # The first column should be the largest
-        layout.setColumnStretch(0, 7)
+        layout.setColumnStretch(0, 6)
         layout.setColumnStretch(1, 1)
         layout.setColumnStretch(2, 1)
         layout.setColumnStretch(3, 1)
+        layout.setColumnStretch(4, 1)
 
         # Set up widgets
         self.duplicatesList = QListWidget()
         self.notIdedList = QListWidget()
         self.customIdedList = QListWidget()
+        self.questionMarkList = QListWidget()
+        self.questionMarkList.itemClicked.connect(self._on_question_mark_item_clicked)
 
         # Set up buttons
         self.swapLRButton = QPushButton("Swap L/R")
@@ -355,18 +365,33 @@ class NeuronNameEditor(QWidget):
         self.deleteAllButton = QPushButton("Delete All Annotations")
         self.deleteAllButton.clicked.connect(self.delete_all_annotations)
 
-        # Set up each column in proper location
-        layout.addWidget(QLabel("Editable table of neuron names"), 0, 0)
-        layout.addWidget(self.tableView, 1, 0, 2, 1)
-        layout.addWidget(QLabel("Duplicated IDs (please fix!)"), 0, 1)
-        layout.addWidget(self.duplicatesList, 1, 1, 2, 1)
-        layout.addWidget(QLabel("Neurons to ID"), 0, 2)
-        layout.addWidget(self.notIdedList, 1, 2, 2, 1)
-        layout.addWidget(QLabel("Custom (non-list) IDs"), 0, 3)
-        layout.addWidget(self.customIdedList, 1, 3, 2, 1)
+        self.confirmQMButton = QPushButton("Confirm (Strip '?')")
+        self.confirmQMButton.setToolTip("Confirm selected uncertain neuron: remove '?' and set Certainty to 1")
+        self.confirmQMButton.clicked.connect(self.confirm_selected_question_mark)
 
+        # Table on top (it needs the width), the four helper lists as tabs below it, buttons at the bottom.
+        # This also works when docked in a narrow side panel.
+        self.listTabs = QTabWidget()
+        self.listTabs.addTab(self.duplicatesList, "Duplicates")
+        self.listTabs.addTab(self.notIdedList, "To ID")
+        self.listTabs.addTab(self.customIdedList, "Custom")
+        self.listTabs.addTab(self.questionMarkList, "'?'")
+        self.duplicatesList.setToolTip("Duplicated IDs (please fix!)")
+        self.notIdedList.setToolTip("Neurons to ID")
+        self.customIdedList.setToolTip("Custom IDs")
+        self.questionMarkList.setToolTip("Unconfirmed '?' IDs")
+
+        layout.addWidget(QLabel("Editable table of neuron names"), 0, 0, 1, 3)
+        layout.addWidget(self.tableView, 1, 0, 1, 3)
+        layout.addWidget(self.listTabs, 2, 0, 1, 3)
         layout.addWidget(self.swapLRButton, 3, 0)
         layout.addWidget(self.deleteAllButton, 3, 1)
+        layout.addWidget(self.confirmQMButton, 3, 2)
+        layout.setRowStretch(0, 0)
+        layout.setRowStretch(1, 3)
+        layout.setRowStretch(2, 1)
+        for column in range(5):
+            layout.setColumnStretch(column, 1)
 
         self.setLayout(layout)
 
@@ -428,6 +453,18 @@ class NeuronNameEditor(QWidget):
                         self.model.item(row, col).flags() | ~Qt.ItemIsEditable
                     )
 
+    def _bring_to_front(self):
+        """Show this editor: select its tab if docked in the napari window, otherwise raise the window"""
+        parent = self.parentWidget()
+        while parent is not None and not isinstance(parent, QDockWidget):
+            parent = parent.parentWidget()
+        if parent is not None:
+            parent.show()
+            parent.raise_()  # Selects the tab when tabified with other docks
+        self.setFocus()
+        self.activateWindow()
+        self.raise_()
+
     def jump_focus_to_neuron(self, neuron_name, column_name=None, column_offset=0):
         """
         Select based on the 'Neuron ID' column in the table
@@ -457,9 +494,7 @@ class NeuronNameEditor(QWidget):
         # selection_model.select(cell_index, QItemSelectionModel.Select)
 
         # Jump to that cell in this window (not focus of main gui)
-        self.setFocus()
-        self.activateWindow()
-        self.raise_()
+        self._bring_to_front()
 
         # Center the scroll bar on the first column of the selected cell
         first_col_cell_index = self.model.index(row_index, 0)
@@ -478,8 +513,15 @@ class NeuronNameEditor(QWidget):
         """
         self.model.clear()
         self.model.setHorizontalHeaderLabels(list(self.df.columns))
+        id_idx = self.manual_id_column_idx if (self.df is not None and self.manual_id_column_name in self.df.columns) else -1
         for row in self.df.values:
-            row_items = [QStandardItem(str(item)) for item in row]
+            has_qm = (id_idx >= 0 and id_idx < len(row) and "?" in str(row[id_idx]))
+            row_items = []
+            for col_idx, item in enumerate(row):
+                it = QStandardItem(str(item))
+                if has_qm and col_idx == id_idx:
+                    it.setForeground(QColor("#d19a66"))
+                row_items.append(it)
             self.model.appendRow(row_items)
 
     def update_dataframe_from_table(self):
@@ -554,12 +596,16 @@ class NeuronNameEditor(QWidget):
 
         # Set up filename, which will be used to save the dataframe
         self.filename = filename
-        self.save_df_to_disk(also_save_h5=True)  # Save initial version as .h5
+        # Only create the file if it doesn't exist yet. Re-writing an existing file on every open
+        # clobbered concurrent edits (Excel, a second explorer) and rewrote the normalized df.
+        if filename is None or not os.path.exists(filename):
+            self.save_df_to_disk(also_save_h5=True)
 
     def update_all_widgets(self):
         self.update_duplicates_list()
         self.update_not_ided_list()
         self.update_custom_ided_list()
+        self.update_question_mark_list()
 
     def save_df_to_disk(self, also_save_h5=True):
         """
@@ -578,20 +624,54 @@ class NeuronNameEditor(QWidget):
 
         # Save
         if also_save_h5:
-            fname = str(Path(self.filename).with_suffix('.h5'))
-            df.to_hdf(fname, key='df_with_missing', mode='w')
+            fname_h5 = str(Path(self.filename).with_suffix('.h5'))
+            try:
+                df.to_hdf(fname_h5, key='df_with_missing', mode='w')
+            except Exception as e:
+                logging.warning(f"Could not save optional .h5 backup ({fname_h5}): {e}")
+                # Remove 0-byte truncated stub if write failed
+                try:
+                    if os.path.exists(fname_h5) and os.path.getsize(fname_h5) == 0:
+                        os.remove(fname_h5)
+                except Exception:
+                    pass
 
         fname = self.filename
+        saved_primary = False
+        self.last_save_error = None
+        # Must end in .xlsx so pandas picks the Excel engine
+        tmp_fname = str(Path(fname).with_name(Path(fname).stem + ".tmp.xlsx"))
         try:
             if not fname.endswith(".xlsx"):
                 raise FileNotFoundError(f"Filename must end with .xlsx; found {fname}")
-            df.to_excel(fname, index=False)
-        except (PermissionError, FileNotFoundError):
-            logging.warning(f"Error when saving {fname}; "
-                            f"Do you have the file open in another program?")
-            return False
+            # Write-then-replace so a crash/lock never leaves a truncated annotation file
+            df.to_excel(tmp_fname, index=False)
+            os.replace(tmp_fname, fname)
+            saved_primary = True
+        except (PermissionError, FileNotFoundError, OSError) as e:
+            self.last_save_error = str(e)
+            logging.warning(f"Error when saving {fname}: {e}; "
+                            f"Do you have the file open in another program or is disk full?")
+            try:
+                if os.path.exists(tmp_fname):
+                    os.remove(tmp_fname)
+            except Exception:
+                pass
 
-        return True
+        # Always write an emergency local backup copy to ~/.wbfm/manual_annotation_backups/
+        try:
+            p_obj = Path(self.filename)
+            proj_dir = p_obj.parent.parent if p_obj.parent.name == "manual_annotation" else p_obj.parent
+            # Hash of the full path: two recordings can share a folder name (e.g. 'project')
+            path_hash = hashlib.md5(str(proj_dir).lower().encode()).hexdigest()[:8]
+            proj_name = f"{proj_dir.parent.name}_{proj_dir.name}_{path_hash}"
+            local_backup_dir = Path.home() / ".wbfm" / "manual_annotation_backups" / proj_name
+            local_backup_dir.mkdir(parents=True, exist_ok=True)
+            df.to_excel(local_backup_dir / "manual_annotation.xlsx", index=False)
+        except Exception as e:
+            logging.debug(f"Could not write local emergency backup: {e}")
+
+        return saved_primary
 
     def update_duplicates_list(self):
         # Clear the duplicate list
@@ -647,11 +727,158 @@ class NeuronNameEditor(QWidget):
             return
 
         custom_ids = list(unique_ids.difference(ids_to_do))
-        # Make sure all entries are strings
-        custom_ids = [str(x) for x in custom_ids]
+        # Make sure all entries are strings and exclude '?' neurons which have their own dedicated list
+        custom_ids = [str(x) for x in custom_ids if "?" not in str(x)]
 
         # Update widget
         self.customIdedList.addItems(custom_ids)
+
+    def update_question_mark_list(self):
+        self.questionMarkList.clear()
+        if self.df is None or self.manual_id_column_name not in self.df.columns:
+            return
+        df = self.df
+        orig_col = self.original_id_column_name
+        id_col = self.manual_id_column_name
+        notes_col = self.notes_column_name if self.notes_column_name in df.columns else None
+
+        for idx, row in df.iterrows():
+            val = str(row[id_col]) if pd.notna(row[id_col]) else ""
+            if "?" in val:
+                orig = str(row[orig_col])
+                notes = str(row[notes_col]).strip() if notes_col and pd.notna(row[notes_col]) else ""
+                short_notes = f" [{notes[:24]}...]" if len(notes) > 24 else (f" [{notes}]" if notes else "")
+                item_text = f"{orig}: {val}{short_notes}"
+                item = QListWidgetItem(item_text)
+                item.setData(Qt.UserRole, orig)
+                item.setForeground(QColor("#d19a66"))
+                self.questionMarkList.addItem(item)
+
+    def _on_question_mark_item_clicked(self, item):
+        orig_name = item.data(Qt.UserRole)
+        if orig_name:
+            self.jump_focus_to_neuron(orig_name)
+
+    def confirm_selected_question_mark(self):
+        """Strip '?' from the currently selected neuron or selected item in questionMarkList and set Certainty to 1."""
+        if self.df is None:
+            return
+        orig_name = None
+        curr_item = self.questionMarkList.currentItem()
+        if curr_item:
+            orig_name = curr_item.data(Qt.UserRole)
+
+        if not orig_name:
+            indexes = self.tableView.selectionModel().selectedIndexes()
+            if indexes:
+                row = indexes[0].row()
+                orig_name = str(self.df.at[row, self.original_id_column_name])
+
+        if not orig_name:
+            return
+
+        if self.accept_question_mark(orig_name):
+            self.jump_focus_to_neuron(orig_name)
+
+    # ------------------------------------------------------------------
+    # Review of uncertain ('?') IDs, e.g. from the ID-transfer pipeline.
+    # The actions below only touch the dataframe/table and emit annotation_updated;
+    # nothing is written to disk until save_df_to_disk (Save all / close).
+    # ------------------------------------------------------------------
+
+    certainty_column_name = "Certainty"
+
+    def _row_of_neuron(self, orig_name):
+        """Label of the dataframe row for this 'Neuron ID', or None"""
+        if self.df is None:
+            return None
+        idx = self.df.index[self.df[self.original_id_column_name].astype(str) == str(orig_name)].tolist()
+        return idx[0] if idx else None
+
+    def uncertain_neurons(self):
+        """'Neuron ID's (in table order) whose ID1 still contains a '?'"""
+        if self.df is None or self.manual_id_column_name not in self.df.columns:
+            return []
+        ids = self.df[self.manual_id_column_name].astype(str)
+        mask = ids.str.contains("?", regex=False)
+        return self.df.loc[mask, self.original_id_column_name].astype(str).tolist()
+
+    def _apply_review_change(self, orig_name, new_id, new_certainty, note=None, record_undo=True):
+        """Single entry point so every review action updates df, table, widgets and napari the same way"""
+        row = self._row_of_neuron(orig_name)
+        if row is None:
+            return False
+        id_col, cert_col, notes_col = self.manual_id_column_name, self.certainty_column_name, self.notes_column_name
+        old_id = str(self.df.at[row, id_col])
+        old_cert = self.df.at[row, cert_col] if cert_col in self.df.columns else None
+        old_note = self.df.at[row, notes_col] if notes_col in self.df.columns else None
+
+        if record_undo:
+            self._review_undo_stack.append((str(orig_name), old_id, old_cert, old_note))
+        self.df.at[row, id_col] = new_id
+        if new_certainty is not None and cert_col in self.df.columns:
+            self.df.at[row, cert_col] = new_certainty
+        if note is not None and notes_col in self.df.columns:
+            existing = str(old_note).strip() if old_note is not None else ""
+            self.df.at[row, notes_col] = f"{existing}; {note}" if existing else note
+        self.update_table_from_dataframe()
+        self.update_all_widgets()
+        if old_id != new_id:
+            self.annotation_updated.emit(str(orig_name), old_id, new_id)
+        return True
+
+    def accept_question_mark(self, orig_name, certainty=1):
+        """Keep the proposed name, strip the '?'. Certainty is raised to at least ``certainty`` (never lowered)"""
+        row = self._row_of_neuron(orig_name)
+        if row is None:
+            return False
+        current = str(self.df.at[row, self.manual_id_column_name])
+        if "?" not in current:
+            return False
+        cert_col = self.certainty_column_name
+        old_cert = self.df.at[row, cert_col] if cert_col in self.df.columns else 0
+        new_cert = max(int(old_cert), certainty) if cert_col in self.df.columns else None
+        return self._apply_review_change(orig_name, current.replace("?", "").strip(), new_cert)
+
+    def reject_question_mark(self, orig_name):
+        """Discard the proposed name: ID1 is cleared (empty), Certainty 0.
+        The rejected proposal is appended to Notes so it is not lost."""
+        row = self._row_of_neuron(orig_name)
+        if row is None:
+            return False
+        current = str(self.df.at[row, self.manual_id_column_name])
+        if "?" not in current:
+            return False
+        return self._apply_review_change(orig_name, "", 0, note=f"rejected {current}")
+
+    def correct_question_mark(self, orig_name, new_name, certainty=1):
+        """Replace the proposal with a different name chosen by the user"""
+        new_name = new_name.strip()
+        if not new_name or "?" in new_name:
+            return False
+        cert_col = self.certainty_column_name
+        row = self._row_of_neuron(orig_name)
+        if row is None:
+            return False
+        old_id = str(self.df.at[row, self.manual_id_column_name])
+        old_cert = self.df.at[row, cert_col] if cert_col in self.df.columns else 0
+        new_cert = max(int(old_cert), certainty) if cert_col in self.df.columns else None
+        return self._apply_review_change(orig_name, new_name, new_cert, note=f"corrected from {old_id}")
+
+    def undo_review_action(self):
+        """Revert the most recent accept/reject/correct. Returns the neuron's name, or None if nothing to undo"""
+        if not self._review_undo_stack:
+            return None
+        orig_name, old_id, old_cert, old_note = self._review_undo_stack.pop()
+        row = self._row_of_neuron(orig_name)
+        if row is None:
+            return None
+        if old_cert is not None and self.certainty_column_name in self.df.columns:
+            self.df.at[row, self.certainty_column_name] = old_cert
+        if old_note is not None and self.notes_column_name in self.df.columns:
+            self.df.at[row, self.notes_column_name] = old_note
+        self._apply_review_change(orig_name, old_id, None, record_undo=False)
+        return orig_name
 
     def original2custom(self, remove_empty=False):
         """

@@ -964,6 +964,79 @@ class TestDeduplicationAndStateUpdates(unittest.TestCase):
             meta2 = extract_metadata_for_project(proj_dir, cache=cache)
             self.assertTrue(meta2["has_tracks"], "Cache must be invalidated when combined_3d_tracks.h5 is added")
 
+    def test_done_and_needs_review_filters_and_status_banner(self):
+        """Verify Done vs Needs Review preset filters and inspector status card rendering."""
+        r_done = {
+            "name": "worm_done",
+            "path": r"C:\fake\worm_done",
+            "config_path": r"C:\fake\worm_done\project_config.yaml",
+            "date": "2026-09-18",
+            "strain": "ZIM2165",
+            "has_masks": True,
+            "has_tracks": True,
+            "has_traces": True,
+            "has_barlow": True,
+            "is_fully_processed": True,
+            "tracked_count": 200,
+            "annotated_count": 190,
+            "annotated_total": 200,
+            "question_mark_count": 0,
+            "has_question_marks": False,
+            "annotated_names": ["AVAL", "AVAR"],
+            "is_recent": False,
+        }
+        r_review = {
+            "name": "worm_review",
+            "path": r"C:\fake\worm_review",
+            "config_path": r"C:\fake\worm_review\project_config.yaml",
+            "date": "2026-09-18",
+            "strain": "ZIM2165",
+            "has_masks": True,
+            "has_tracks": True,
+            "has_traces": True,
+            "has_barlow": True,
+            "is_fully_processed": True,
+            "tracked_count": 200,
+            "annotated_count": 185,
+            "annotated_total": 200,
+            "question_mark_count": 14,
+            "has_question_marks": True,
+            "annotated_names": ["AVAL", "AVAR", "CEPDR?"],
+            "question_mark_names": ["CEPDR?"],
+            "is_recent": False,
+        }
+        self.dashboard.table.setRowCount(0)
+        self.dashboard.records_by_path.clear()
+        self.dashboard._on_recording_discovered(r_done)
+        self.dashboard._on_recording_discovered(r_review)
+
+        self.assertEqual(self.dashboard.table.rowCount(), 2)
+
+        # Check Done filter
+        self.dashboard.chk_done_only.setChecked(True)
+        self.assertFalse(self.dashboard.table.isRowHidden(0), "Done worm should be visible")
+        self.assertTrue(self.dashboard.table.isRowHidden(1), "Needs review worm should be hidden")
+        self.dashboard.chk_done_only.setChecked(False)
+
+        # Check Needs Review filter
+        self.dashboard.chk_question_marks.setChecked(True)
+        self.assertTrue(self.dashboard.table.isRowHidden(0), "Done worm should be hidden")
+        self.assertFalse(self.dashboard.table.isRowHidden(1), "Needs review worm should be visible")
+        self.dashboard.chk_question_marks.setChecked(False)
+
+        # Check Inspector Status banner for Done
+        self.dashboard._update_inspector(r_done)
+        self.assertFalse(self.dashboard.frame_qm_alert.isHidden())
+        self.assertIn("Complete & Confirmed", self.dashboard.lbl_qm_alert.text())
+        self.assertTrue(self.dashboard.btn_qm_review.isHidden())
+
+        # Check Inspector Status banner for Needs Review
+        self.dashboard._update_inspector(r_review)
+        self.assertFalse(self.dashboard.frame_qm_alert.isHidden())
+        self.assertIn("Needs Review", self.dashboard.lbl_qm_alert.text())
+        self.assertFalse(self.dashboard.btn_qm_review.isHidden())
+        self.assertIn("14", self.dashboard.btn_qm_review.text())
+
 
 if __name__ == "__main__":
     unittest.main()

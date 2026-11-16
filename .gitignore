@@ -83,6 +83,9 @@ envs/
 .claude/
 .gemini/
 .claudeignore
+.geminiignore
+.dashboard_cache.json
+.custom_roots.json
 .recent_projects.json
 launcher_settings.local.bat
 launch_litworm4.bat

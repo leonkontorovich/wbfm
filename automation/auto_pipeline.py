@@ -31,6 +31,7 @@ import shutil
 import logging
 import argparse
 import subprocess
+import functools
 import yaml
 from pathlib import Path
 from typing import Tuple, Optional, Dict, Any, List
@@ -42,7 +43,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger("WBFM_Auto")
 
-SCRATCH_WIN_ROOT = Path(r"Z:\neurobiology\zimmer")
+@functools.lru_cache(maxsize=1)
+def scratch_win_root() -> Path:
+    """Windows mount of the cluster scratch. Resolved lazily: stat'ing Z: at import time made
+    every ``go`` subcommand (even ones that never touch the share) hang when Z: is slow."""
+    full = Path(r"Z:\neurobiology\zimmer")
+    return full if full.exists() else Path("Z:\\")
+
+
 SCRATCH_LINUX_ROOT = "/lisc/data/scratch/neurobiology/zimmer"
 CLUSTER_SSH_HOST = "lisc"
 CLUSTER_ENV_PYTHON = f"{SCRATCH_LINUX_ROOT}/.conda/envs/wbfm/bin/python"
@@ -70,6 +78,8 @@ def win_to_linux_path(win_path: Path) -> str:
     p_str = str(win_path).replace("\\", "/")
     if p_str.lower().startswith("z:/neurobiology/zimmer"):
         return SCRATCH_LINUX_ROOT + p_str[len("z:/neurobiology/zimmer"):]
+    if p_str.lower().startswith("z:/"):
+        return SCRATCH_LINUX_ROOT + p_str[len("z:"):]
     if "//samba.lisc.univie.ac.at/scratch/neurobiology/zimmer" in p_str:
         idx = p_str.find("/neurobiology/zimmer")
         return SCRATCH_LINUX_ROOT + p_str[idx + len("/neurobiology/zimmer"):]
@@ -83,15 +93,18 @@ def linux_to_win_path(linux_path: str) -> Path:
     l_str = linux_path.replace("\\", "/")
     if l_str.startswith(SCRATCH_LINUX_ROOT):
         rel = l_str[len(SCRATCH_LINUX_ROOT):].lstrip("/")
-        return SCRATCH_WIN_ROOT / Path(rel.replace("/", "\\"))
+        return scratch_win_root() / Path(rel.replace("/", "\\"))
     return Path(linux_path)
 
 
-def run_ssh_cmd(cmd: str, check: bool = True) -> subprocess.CompletedProcess:
-    """Run remote command on LISC cluster using OpenSSH."""
-    full_cmd = ["ssh", CLUSTER_SSH_HOST, cmd]
+def run_ssh_cmd(cmd: str, check: bool = True, timeout: int = 300) -> subprocess.CompletedProcess:
+    """Run remote command on LISC cluster using OpenSSH (bounded: an unreachable cluster fails instead of hanging)."""
+    full_cmd = ["ssh", "-o", "ConnectTimeout=15", CLUSTER_SSH_HOST, cmd]
     logger.debug(f"SSH: {cmd}")
-    res = subprocess.run(full_cmd, capture_output=True, text=True)
+    try:
+        res = subprocess.run(full_cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"Remote command timed out after {timeout}s: {cmd[:80]}")
     if check and res.returncode != 0:
         logger.error(f"Remote command failed (code {res.returncode}): {res.stderr.strip()}")
         raise RuntimeError(f"Remote command failed: {res.stderr.strip()}")
@@ -140,7 +153,7 @@ def discover_worm_folders(target_dir: Path) -> List[Path]:
 
 def find_latest_raw_folder() -> Path:
     """Find newest unanalyzed raw recording or batch folder."""
-    raw_root = SCRATCH_WIN_ROOT / "LeonK" / "raw"
+    raw_root = scratch_win_root() / "LeonK" / "raw"
     if not raw_root.exists():
         raise FileNotFoundError(f"Raw root not found: {raw_root}")
 
@@ -250,10 +263,10 @@ def initialize_project(raw_dir: Path, output_parent_dir: Optional[Path] = None, 
     if output_parent_dir is None:
         parent_name = raw_dir.parent.name
         if re.match(r"^\d{6,8}$", parent_name):
-            output_parent_dir = SCRATCH_WIN_ROOT / "LeonK" / f"Analysis{parent_name}"
+            output_parent_dir = scratch_win_root() / "LeonK" / f"Analysis{parent_name}"
         else:
             date_tag = time.strftime("%Y%m%d")
-            output_parent_dir = SCRATCH_WIN_ROOT / "LeonK" / f"Analysis_{date_tag}"
+            output_parent_dir = scratch_win_root() / "LeonK" / f"Analysis_{date_tag}"
 
     output_parent_dir.mkdir(parents=True, exist_ok=True)
     out_linux_parent = win_to_linux_path(output_parent_dir)
@@ -497,7 +510,103 @@ def verify_outputs(project_dir: Path) -> Dict[str, bool]:
         "SuperGlue Tracks (combined_3d_tracks.h5)": sg_tracks.exists() and sg_tracks.stat().st_size > 0,
         "Barlow Embeddings (embedding.zarr)": bt_embed.exists(),
         "Calcium Traces (green_traces.h5)": len(traces_candidates) > 0 and traces_candidates[0].stat().st_size > 0,
+        "Neuron Annotations (manual_annotation.xlsx)": len(annot_candidates) > 0 and annot_candidates[0].stat().st_size > 0,
     }
+
+
+def check_question_mark_neurons(target_path: Optional[Path] = None, only_pending: bool = False):
+    """Scan projects and display where unconfirmed '?' neurons from ID-transfer are located."""
+    import pandas as pd
+    import json
+
+    project_dirs = []
+    if target_path is not None:
+        p = Path(target_path)
+        if (p / "project_config.yaml").exists():
+            project_dirs.append(p)
+        elif p.is_dir():
+            for sub in sorted(p.iterdir()):
+                if sub.is_dir() and (sub / "project_config.yaml").exists():
+                    project_dirs.append(sub)
+                elif sub.is_dir():
+                    for sub2 in sorted(sub.iterdir()):
+                        if sub2.is_dir() and (sub2 / "project_config.yaml").exists():
+                            project_dirs.append(sub2)
+    else:
+        recent_file = Path(__file__).resolve().parent.parent / ".recent_projects.json"
+        if recent_file.exists():
+            try:
+                with open(recent_file, "r", encoding="utf-8") as f:
+                    entries = json.load(f)
+                for e in entries:
+                    raw_p = e.get("path", "")
+                    p = Path(raw_p).parent if raw_p.endswith(".yaml") else Path(raw_p)
+                    if p.exists() and p not in project_dirs:
+                        project_dirs.append(p)
+            except Exception:
+                pass
+
+    if not project_dirs:
+        print("No project directories found to inspect.")
+        return
+
+    print("=" * 110)
+    print(f"{'WBFM ID-Transfer Neurons Review (? Status)':^110}")
+    if target_path:
+        print(f"Target directory: {target_path}")
+    print("=" * 110)
+    print(f"{'Recording Name':<44} | {'Total ID':<9} | {'Confirmed':<9} | {'Pending ?':<9} | {'Sample Uncertain IDs'}")
+    print("-" * 110)
+
+    total_projs = len(project_dirs)
+    projs_with_qm = 0
+    total_qm_count = 0
+
+    for p in project_dirs:
+        ann_candidates = [
+            p / "3-tracking" / "manual_annotation" / "manual_annotation.xlsx",
+            p / "3-tracking" / "id_transfer_output" / "hungarian" / "manual_annotation.xlsx",
+            p / "3-tracking" / "hungarian" / "manual_annotation.xlsx",
+            p / "manual_annotation.xlsx",
+        ]
+        target_ann = next((cand for cand in ann_candidates if cand.exists()), None)
+
+        if not target_ann:
+            if not only_pending:
+                print(f"{p.name:<44} | {'[No IDs]':<9} | {'-':<9} | {'-':<9} | -")
+            continue
+
+        try:
+            df = pd.read_excel(target_ann)
+            id_col = "ID1" if "ID1" in df.columns else ("id1" if "id1" in df.columns else None)
+            if not id_col:
+                if not only_pending:
+                    print(f"{p.name:<44} | {'[No ID1]':<9} | {'-':<9} | {'-':<9} | -")
+                continue
+
+            total_ided = df[df[id_col].astype(str).str.strip().ne('') & ~df[id_col].astype(str).str.lower().isin(['nan', 'none'])]
+            qm = df[df[id_col].astype(str).str.contains(r'\?', na=False)]
+            qm_count = len(qm)
+            tot_count = len(total_ided)
+            conf_count = tot_count - qm_count
+
+            if qm_count > 0:
+                projs_with_qm += 1
+                total_qm_count += qm_count
+                qm_names = qm[id_col].tolist()
+                sample_str = ", ".join(qm_names[:6])
+                if len(qm_names) > 6:
+                    sample_str += f" (+{len(qm_names) - 6} more)"
+                print(f"{p.name:<44} | {tot_count:<9} | {conf_count:<9} | {qm_count:<9} | {sample_str}")
+            elif not only_pending:
+                print(f"{p.name:<44} | {tot_count:<9} | {conf_count:<9} | {0:<9} | [All Confirmed]")
+        except Exception as e:
+            if not only_pending:
+                print(f"{p.name:<44} | [Error: {e}]")
+
+    print("-" * 110)
+    print(f"Summary: {total_projs} recordings checked | {projs_with_qm} have pending '?' neurons | {total_qm_count} total '?' neurons")
+    print("=" * 110)
 
 
 def process_single_worm(worm_raw_dir: Path, output_parent: Optional[Path], experimenter: str, immobilized: bool = False) -> Dict[str, Any]:
@@ -536,6 +645,11 @@ def main():
     # verify
     p_ver = subparsers.add_parser("verify", help="Verify deliverables")
     p_ver.add_argument("project_folder", help="Project directory")
+
+    # check-ids
+    p_cids = subparsers.add_parser("check-ids", help="Scan projects and list all unconfirmed '?' neurons from ID-transfer")
+    p_cids.add_argument("folder", nargs="?", default=None, help="Project directory or parent batch directory (defaults to recent)")
+    p_cids.add_argument("--only-pending", action="store_true", help="Only show recordings with pending '?' neurons")
 
     args = parser.parse_args()
 
@@ -586,8 +700,9 @@ def main():
             print(s['latest_log_tail'])
 
     elif args.command == "verify":
-        v = verify_outputs(Path(args.project_folder))
-        print(f"\nDeliverables for: {Path(args.project_folder).name}")
+        proj_dir = Path(args.project_folder)
+        v = verify_outputs(proj_dir)
+        print(f"\nDeliverables for: {proj_dir.name}")
         all_ok = True
         for k, ok in v.items():
             status_str = "[OK]" if ok else "[MISSING / PENDING]"
@@ -596,6 +711,42 @@ def main():
                 all_ok = False
         print("----------------------------------------------------------------")
         print("RESULT: " + ("ALL DELIVERABLES READY!" if all_ok else "SOME OUTPUTS PENDING."))
+
+        # Also report ID transfer '?' status if annotations exist
+        ann_candidates = [
+            proj_dir / "3-tracking" / "manual_annotation" / "manual_annotation.xlsx",
+            proj_dir / "3-tracking" / "id_transfer_output" / "hungarian" / "manual_annotation.xlsx",
+            proj_dir / "3-tracking" / "hungarian" / "manual_annotation.xlsx",
+            proj_dir / "manual_annotation.xlsx",
+        ]
+        target_ann = next((c for c in ann_candidates if c.exists()), None)
+        if target_ann:
+            try:
+                import pandas as pd
+                df = pd.read_excel(target_ann)
+                id_col = "ID1" if "ID1" in df.columns else ("id1" if "id1" in df.columns else None)
+                if id_col:
+                    total_ided = df[df[id_col].astype(str).str.strip().ne('') & ~df[id_col].astype(str).str.lower().isin(['nan', 'none'])]
+                    qm = df[df[id_col].astype(str).str.contains(r'\?', na=False)]
+                    tot_count = len(total_ided)
+                    qm_count = len(qm)
+                    conf_count = tot_count - qm_count
+                    print(f"\nNeuron Identifications ({target_ann.name}):")
+                    print(f"  Total Identified:  {tot_count}")
+                    print(f"  Confirmed IDs:     {conf_count}")
+                    print(f"  Pending '?' IDs:   {qm_count}")
+                    if qm_count > 0:
+                        qm_list = qm[id_col].tolist()
+                        sample = ", ".join(qm_list[:8])
+                        if len(qm_list) > 8:
+                            sample += f" (+{len(qm_list) - 8} more)"
+                        print(f"  '?' Neurons:       {sample}")
+            except Exception as e:
+                logger.debug(f"Could not parse annotations: {e}")
+
+    elif args.command == "check-ids":
+        target = Path(args.folder) if args.folder else None
+        check_question_mark_neurons(target, only_pending=args.only_pending)
 
 if __name__ == "__main__":
     main()
