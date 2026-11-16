@@ -97,6 +97,27 @@ def linux_to_win_path(linux_path: str) -> Path:
     return Path(linux_path)
 
 
+# Oct 2026 LiSC audit: segmentation peaked at 13.2G RAM / 8.3 cores / ~12h (see AGENTS.md, invariant 9)
+SEGMENTATION_RESOURCES = {"time": "0-16:00:00", "mem": "48G", "cpus_per_task": "12"}
+
+
+def right_size_segmentation_resources(text: str) -> str:
+    """Rewrite time/mem/cpus_per_task of the (alt_)segmentation blocks of a cluster_config.yaml.
+
+    Line-based on purpose: keeps comments, key order and line endings of the project's file intact."""
+    out, in_block = [], False
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if line and not line[0].isspace() and not stripped.startswith("#"):
+            in_block = stripped in ("segmentation:", "alt_segmentation:")
+        elif in_block:
+            m = re.match(r"^(\s+)(time|mem|cpus_per_task):\s*\S+(.*)$", line)
+            if m:
+                line = f"{m.group(1)}{m.group(2)}: {SEGMENTATION_RESOURCES[m.group(2)]}{m.group(3)}"
+        out.append(line)
+    return "\n".join(out)
+
+
 def run_ssh_cmd(cmd: str, check: bool = True, timeout: int = 300) -> subprocess.CompletedProcess:
     """Run remote command on LISC cluster using OpenSSH (bounded: an unreachable cluster fails instead of hanging)."""
     full_cmd = ["ssh", "-o", "ConnectTimeout=15", CLUSTER_SSH_HOST, cmd]
@@ -363,6 +384,17 @@ def initialize_project(raw_dir: Path, output_parent_dir: Optional[Path] = None, 
                 logger.warning(f"Could not patch {runme}; barlow_embedding will re-run segmentation!")
     else:
         logger.warning(f"Expected RUNME.sh not found at {runme}; barlow_embedding will re-run segmentation!")
+
+    # Right-size the segmentation Slurm request (the template still asks for 256G / 40 cores / 36h)
+    cluster_cfg = project_dir / "snakemake" / "cluster_config.yaml"
+    if cluster_cfg.exists():
+        with open(cluster_cfg, "r", newline="") as f:
+            c = f.read()
+        c_new = right_size_segmentation_resources(c)
+        if c_new != c:
+            with open(cluster_cfg, "w", newline="") as f:
+                f.write(c_new)
+            logger.info(f"Configured cluster_config.yaml: segmentation uses {SEGMENTATION_RESOURCES} [OK]")
 
     if immobilized:
         seg_cfg = project_dir / "1-segmentation" / "segment_config.yaml"
