@@ -29,7 +29,8 @@ notebooks/Scratch/
 *.npz
 wbfm/utils/neuron_matching/opencv_samples/
 old/*
-.idea/
+.idea
+.vscode
 /wbfm/experiments/
 wbfm/new_project_defaults/snakemake/.snakemake/
 *.out.*
@@ -93,4 +94,13 @@ launch_litworm4.bat
 # Personal, machine-specific notes and agent guides (kept local, not for upstream PRs)
 notes/
 AGENTS.md
+.bash_profile
+.bashrc
+.gitconfig
+.profile
+.ripgreprc
+.zprofile
+.zshrc
+.claude/agents
+.claude/commands
 CLAUDE.md

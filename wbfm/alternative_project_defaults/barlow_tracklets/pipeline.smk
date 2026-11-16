@@ -37,6 +37,11 @@ except (NoBehaviorDataError, RawDataFormatError, FileNotFoundError) as e:
     background_video = "NOTFOUND_background_video"
     behavior_btf = "NOTFOUND_behavior_btf"
     raw_data_subfolder = "NOTFOUND_raw_data_subfolder"
+except ValueError as e:
+    raise ValueError(
+        f"Version mismatch between pipeline.smk and installed wbfm: {e}. "
+        f"Refresh pipeline.smk/RUNME.sh from the template or update wbfm."
+    ) from e
 
 # Also get the raw data config file (if it exists)
 try:
