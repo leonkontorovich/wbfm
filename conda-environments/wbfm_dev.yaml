@@ -29,7 +29,7 @@ dependencies:
   - networkx
   - lmfit
   - natsort
-  - snakemake
+  - snakemake=7.32  # pipeline.smk and RUNME.sh need v7 (--cluster, workflow.basedir); 8.x breaks them
   - napari[all]
   - pytorch=1.13.0
   - torchvision
