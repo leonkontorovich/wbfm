@@ -4,7 +4,7 @@ Most of this information is only relevant to the Zimmer lab, and uses internal f
 
 ## Legacy data preparation
 
-See expected folder structure [here](docs/data_folder_organization.md).
+See expected folder structure [here](data_folder_organization.md).
 
 1. Red channel (tracking) as an ndtiff folder
 2. Green channel (signal) as an ndtiff folder
@@ -16,13 +16,13 @@ An alternatives to ndtiff for raw data:
 
 ### Legacy creating a single project (single recording)
 
-Most people will create multiple projects at once (next section), but for a single recording, see: [detailed pipeline steps](docs/detailed_pipeline_steps.md).
+Most people will create multiple projects at once (next section), but for a single recording, see: [detailed pipeline steps](detailed_pipeline_steps.md).
 
 ### Creating multiple projects
 
 Each recording will generate one project, and you can use the create_projects_from_folder.sh script.
 
-Important: the data folders must be organized in a specific way, see [here](docs/data_folder_organization.md).
+Important: the data folders must be organized in a specific way, see [here](data_folder_organization.md).
 
 ```commandline
 bash /PATH_TO_THIS_CODE/wbfm/scripts/cluster/create_multiple_projects_from_data_parent_folder.sh -t /path/to/parent/data/folder -p /path/to/projects/folder
@@ -65,7 +65,7 @@ For all other settings, the defaults should work well.
 
 ### Running the rest of the workflow for single project
 
-Most people will run multiple projects at once (next section), but for a single recording, see: [detailed pipeline steps](docs/detailed_pipeline_steps.md).
+Most people will run multiple projects at once (next section), but for a single recording, see: [detailed pipeline steps](detailed_pipeline_steps.md).
 
 ### Running the rest of the workflow for multiple projects
 
@@ -79,4 +79,4 @@ bash /PATH_TO_THIS_CODE/wbfm/scripts/cluster/run_all_projects_in_parent_folder.s
 Note that you should run this script from a directory where you have permission to create files.
 Otherwise the log files will be created in the directory where you ran the script, which will crash silently due to permission errors.
 
-For more details on each step, see: [detailed pipeline steps](docs/detailed_pipeline_steps.md).
+For more details on each step, see: [detailed pipeline steps](detailed_pipeline_steps.md).

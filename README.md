@@ -83,7 +83,7 @@ Please also check (via search) the open and closed issues on github.
 
 [Detailed installation instructions](docs/installation_instructions.md)
 
-[Known issues](docs/known_issues.md)
+[Known issues (FAQ)](docs/faq.md)
 
 [Folder organization](docs/data_folder_organization.md)
 
