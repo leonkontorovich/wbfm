@@ -13,6 +13,7 @@ import argparse
 import json
 import re
 import datetime
+import time
 import logging
 import functools
 from typing import Optional, List, Dict, Tuple, Any
@@ -35,6 +36,7 @@ from qtpy.QtGui import QColor, QFont, QIcon, QBrush, QPixmap, QPainter
 HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".recent_projects.json")
 CUSTOM_ROOTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".custom_roots.json")
 CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".dashboard_cache.json")
+INCOMPLETE_CACHE_RETRY_S = 300  # re-read a project whose last metadata read failed after this many seconds
 APP_ICON_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wbfm", "gui", "icons", "wbfm_dashboard.ico")
 
 
@@ -654,8 +656,13 @@ def extract_metadata_for_project(project_dir: str, cache: Optional[Dict[str, Any
     if cache is not None and project_dir in cache:
         cached = cache[project_dir]
         cached_fp = cached.get("fingerprint")
+        # An entry from a failed read is reused only briefly: transient problems (file being written, SMB hiccup,
+        # Excel lock) heal on a later scan, and a permanently broken file is re-read at most every few minutes
+        retry_due = bool(cached.get("read_errors")) and (
+            time.time() - float(cached.get("checked_at", 0)) > INCOMPLETE_CACHE_RETRY_S)
         if (
-            (cached_fp == current_fp if cached_fp else cached.get("mtime") == current_mtime)
+            not retry_due
+            and (cached_fp == current_fp if cached_fp else cached.get("mtime") == current_mtime)
             and "metadata" in cached
             and isinstance(cached["metadata"], dict)
             and "annotated_names" in cached["metadata"]
@@ -905,13 +912,13 @@ def extract_metadata_for_project(project_dir: str, cache: Optional[Dict[str, Any
     ac = meta["annotated_count"]
     meta["missing_annotations"] = (tc > 0 and (ac == 0 or ac < tc))
 
-    # Update cache (only complete results; a failed read is retried on the next scan instead of sticking until F5)
+    # Update cache; results of failed reads are marked so they get retried (see INCOMPLETE_CACHE_RETRY_S)
     if cache is not None:
+        entry = {"mtime": current_mtime, "fingerprint": current_fp, "metadata": meta}
         if read_errors:
-            logging.debug(f"Not caching metadata for {project_dir}: {read_errors}")
-            cache.pop(project_dir, None)
-        else:
-            cache[project_dir] = {"mtime": current_mtime, "fingerprint": current_fp, "metadata": meta}
+            logging.debug(f"Incomplete metadata for {project_dir} (retried later): {read_errors}")
+            entry.update(read_errors=read_errors, checked_at=time.time())
+        cache[project_dir] = entry
 
     return meta
 

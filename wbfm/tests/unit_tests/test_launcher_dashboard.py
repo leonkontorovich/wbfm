@@ -16,6 +16,7 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", 
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+import launch_gui  # noqa: E402
 from launch_gui import (
     canonical_path,
     get_project_fingerprint,
@@ -31,6 +32,9 @@ from launch_gui import (
     FlowLayout,
     DARK_THEME_QSS,
 )
+
+# The launcher is Windows-only (drive letters, os.startfile); these tests use Windows path semantics
+windows_only = unittest.skipUnless(sys.platform == "win32", "Windows path semantics (launch_gui.py is Windows-only)")
 from qtpy.QtWidgets import QApplication, QHeaderView, QScrollArea
 from qtpy.QtCore import Qt, QTimer
 
@@ -210,10 +214,15 @@ class TestMetadataExtraction(unittest.TestCase):
         with patch("pandas.read_excel", side_effect=ValueError("half-written file")):
             meta = extract_metadata_for_project(proj_dir, cache=cache)
         self.assertEqual(meta["annotated_count"], 0)
-        self.assertNotIn(proj_dir, cache)  # retried on the next scan instead of showing 0 IDs until F5
+        self.assertTrue(cache[proj_dir]["read_errors"])
+        # Within the retry interval the incomplete entry is reused (a broken file is not re-read on every scan) ...
+        with patch("pandas.read_excel", side_effect=AssertionError("must not re-read yet")):
+            extract_metadata_for_project(proj_dir, cache=cache)
+        # ... afterwards it is read again, and a good result replaces it (instead of showing 0 IDs until F5)
+        cache[proj_dir]["checked_at"] -= launch_gui.INCOMPLETE_CACHE_RETRY_S + 1
         meta = extract_metadata_for_project(proj_dir, cache=cache)
         self.assertEqual(meta["annotated_names"], ["AVAL"])
-        self.assertIn(proj_dir, cache)
+        self.assertNotIn("read_errors", cache[proj_dir])
 
     def test_open_in_excel_follows_the_newest_annotation_file(self):
         import pandas as pd
@@ -488,6 +497,7 @@ class TestDashboardUI(unittest.TestCase):
         self.assertEqual(len(self.dashboard.ann_badges), 4)
         self.assertTrue(self.dashboard.btn_quick_glance.isEnabled())
 
+    @windows_only
     def test_metadata_caching(self):
         from launch_gui import load_metadata_cache, save_metadata_cache
         test_cache = {
@@ -544,6 +554,7 @@ class TestDashboardUI(unittest.TestCase):
         self.assertEqual(self.dashboard.minimumWidth(), 720)
         self.assertEqual(self.dashboard.minimumHeight(), 420)
 
+    @windows_only
     def test_launch_selected_keep_open_standalone(self):
         """Verify dashboard stays open and launches subprocess in standalone mode with keep_open=True."""
         standalone_dialog = WBFMRecordingDashboard(standalone=True)
@@ -804,6 +815,7 @@ class TestBilateralAndFlowLayout(unittest.TestCase):
 
 
 class TestCanonicalPathAndFingerprinting(unittest.TestCase):
+    @windows_only
     def test_canonical_path_windows_slashes(self):
         p_fwd = "Z:/neurobiology/zimmer/LeonK/Lit_immob/ZIM2165_Litworm4-2026-09-17"
         p_back = r"Z:\neurobiology\zimmer\LeonK\Lit_immob\ZIM2165_Litworm4-2026-09-17"
@@ -866,6 +878,7 @@ class TestDeduplicationAndStateUpdates(unittest.TestCase):
         self.dashboard.stop_scanner()
         self.dashboard.close()
 
+    @windows_only
     def test_discovery_deduplication_different_slashes(self):
         r1 = {
             "name": "ZIM2165_Litworm4-2026-09-17",
@@ -914,6 +927,7 @@ class TestDeduplicationAndStateUpdates(unittest.TestCase):
         self.assertEqual(self.dashboard.table.rowCount(), 1, "Duplicate recording path with different slashes must not create duplicate table row")
         self.assertEqual(len(self.dashboard.records_by_path), 1)
 
+    @windows_only
     def test_update_matches_differently_slashed_path(self):
         r1 = {
             "name": "ZIM2165_Litworm4-2026-09-17",

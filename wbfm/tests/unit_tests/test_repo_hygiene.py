@@ -9,9 +9,17 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
+def local_agent_file(name: str) -> Path:
+    """AGENTS.md, CLAUDE.md and the agent ignore files are gitignored (local to each workstation): check them where
+    they exist, skip in a fresh clone (CI, the cluster) instead of failing there"""
+    path = REPO_ROOT / name
+    if not path.exists():
+        pytest.skip(f"{name} is local-only (gitignored) and not present in this checkout")
+    return path
+
+
 def test_agents_md_exists_and_size_bounded():
-    agents_path = REPO_ROOT / "AGENTS.md"
-    assert agents_path.exists(), f"AGENTS.md missing at {agents_path}"
+    agents_path = local_agent_file("AGENTS.md")
     
     size_bytes = agents_path.stat().st_size
     max_bytes = 15 * 1024  # 15 KB bound
@@ -29,8 +37,7 @@ def test_agents_md_exists_and_size_bounded():
 
 
 def test_claude_md_is_clean_pointer():
-    claude_path = REPO_ROOT / "CLAUDE.md"
-    assert claude_path.exists(), f"CLAUDE.md missing at {claude_path}"
+    claude_path = local_agent_file("CLAUDE.md")
     
     size_bytes = claude_path.stat().st_size
     assert size_bytes < 1024, f"CLAUDE.md is unexpectedly large ({size_bytes} bytes); should be a concise pointer."
@@ -53,8 +60,7 @@ def test_windows_setup_narrative_is_archived():
 
 @pytest.mark.parametrize("filename", [".geminiignore", ".claudeignore"])
 def test_ignore_rules_block_heavy_context_assets(filename):
-    ignore_path = REPO_ROOT / filename
-    assert ignore_path.exists(), f"{filename} missing at root {ignore_path}"
+    ignore_path = local_agent_file(filename)
     
     content = ignore_path.read_text(encoding="utf-8")
     lines = {line.strip() for line in content.splitlines() if line.strip() and not line.startswith("#")}

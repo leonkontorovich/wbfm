@@ -8,7 +8,8 @@ CALL "%~dp0launcher_settings.bat"
 IF NOT EXIST "%WBFM_PYTHON%" (
     echo ERROR: Python not found at "%WBFM_PYTHON%"
     echo Set WBFM_CONDA_ROOT / WBFM_ENV in launcher_settings.local.bat
-    CALL :show_error "Python not found at %WBFM_PYTHON%. Set WBFM_CONDA_ROOT / WBFM_ENV in launcher_settings.local.bat"
+    SET "WBFM_MSG=Python not found at %WBFM_PYTHON%. Set WBFM_CONDA_ROOT / WBFM_ENV in launcher_settings.local.bat"
+    CALL :show_error
     pause
     EXIT /B 1
 )
@@ -24,12 +25,14 @@ SET "WBFM_RC=%ERRORLEVEL%"
 IF NOT "%WBFM_RC%"=="0" (
     echo.
     echo ERROR: The GUI exited with error code %WBFM_RC%. See output above.
-    CALL :show_error "The WBFM Dashboard exited with error code %WBFM_RC%. Details are in the WBFM Dashboard console window on the taskbar."
+    SET "WBFM_MSG=The WBFM Dashboard exited with error code %WBFM_RC%. Details are in the WBFM Dashboard console window on the taskbar."
+    CALL :show_error
     pause
 )
 EXIT /B %WBFM_RC%
 
 :show_error
-REM Message box, so an error is not missed when this console is minimized
-powershell.exe -NoProfile -WindowStyle Hidden -Command "Add-Type -AssemblyName PresentationFramework; [void][System.Windows.MessageBox]::Show('%~1', 'WBFM Dashboard', 'OK', 'Error')" >NUL 2>&1
+REM Message box, so an error is not missed when this console is minimized. The text is passed in WBFM_MSG (an
+REM environment variable), so quotes, apostrophes or percent signs in paths cannot break the PowerShell command
+powershell.exe -NoProfile -WindowStyle Hidden -Command "Add-Type -AssemblyName PresentationFramework; [void][System.Windows.MessageBox]::Show($env:WBFM_MSG, 'WBFM Dashboard', 'OK', 'Error')" >NUL 2>&1
 EXIT /B 0

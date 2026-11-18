@@ -20,6 +20,9 @@ from launch_gui import (
     describe_acquisition, reference_patterns,
 )
 
+# The launcher is Windows-only (drive letters, os.startfile); these tests use Windows path semantics
+windows_only = unittest.skipUnless(sys.platform == "win32", "Windows path semantics (launch_gui.py is Windows-only)")
+
 # Reference recordings are configured per machine; the tests use a fixed pattern regardless of local settings
 _env_patch = mock.patch.dict(os.environ, {"WBFM_REFERENCE_PATTERNS": "reference_set"})
 
@@ -59,6 +62,7 @@ class TestHelpers(unittest.TestCase):
             self.assertEqual(reference_patterns(), [])
             self.assertEqual(recording_source(rec), "Mine")  # nothing configured: everything is your own
 
+    @windows_only
     def test_date_first_folder_names_have_no_fake_strain(self):
         meta = extract_metadata_for_project(r"C:\does\not\exist\2026-06-30_13-02_control_tet_worm1-2026-06-30")
         self.assertEqual(meta["strain"], "")
@@ -73,6 +77,7 @@ class TestHelpers(unittest.TestCase):
         rec = {"annotated_names": ["AVAL", "RIML?", "avar"]}
         self.assertEqual(count_neuron_matches(rec, ["aval", "riml", "avar", "smdd"]), 2)
 
+    @windows_only
     def test_drive_root(self):
         self.assertTrue(is_drive_root("C:\\"))
         self.assertTrue(is_drive_root("Z:"))
