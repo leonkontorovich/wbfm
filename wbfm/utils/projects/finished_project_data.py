@@ -21,7 +21,7 @@ from sklearn.decomposition import PCA
 from wbfm.utils.general.utils_paper import PaperDataCache, apply_figure_settings, paper_trace_settings
 from wbfm.utils.general.utils_behavior_annotation import BehaviorCodes
 from wbfm.utils.external.utils_jupyter import executing_in_notebook
-from wbfm.utils.external.utils_zarr import zarr_reader_folder_or_zipstore
+from wbfm.utils.external.utils_zarr import zarr_reader_folder_or_zipstore, zeros_like_compat
 from wbfm.utils.external.custom_errors import NoMatchesError, NoNeuronsError, NoBehaviorAnnotationsError, \
     IncompleteConfigFileError, DataSynchronizationError, MissingAnalysisError
 from wbfm.utils.general.postprocessing.utils_imputation import impute_missing_values_in_dataframe
@@ -440,7 +440,7 @@ class ProjectData:
             tracking_cfg=tracking_cfg,
             training_cfg=training_cfg,
             z_to_xy_ratio=self.physical_unit_conversion.z_to_xy_ratio,
-            buffer_masks=zarr.empty(self.raw_segmentation.shape, dtype=self.raw_segmentation.dtype, zarr_format=2),
+            buffer_masks=zeros_like_compat(self.raw_segmentation),
             to_setup_interactivity=self.set_up_tracklet_interactivity,
             logger=self.logger,
             verbose=self.verbose,
