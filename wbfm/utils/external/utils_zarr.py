@@ -20,12 +20,18 @@ def zeros_like_compat(arr, store=None):
     array is written in zarr v2 format, uncompressed, so the cluster's zarr 2 can still read it.
 
     store: None for an in-memory array, a path, or (zarr 2 only) a store object such as zarr.DirectoryStore
+
+    ``arr`` may also be a dask or numpy array (e.g. masks of an NWB-loaded project): dask's chunks are a tuple of
+    tuples, which zarr.zeros_like cannot use, so non-zarr input gets one volume per chunk.
     """
-    if ZARR_MAJOR_VERSION < 3:
-        return zarr.zeros_like(arr, store=store)
     chunks = getattr(arr, "chunks", None)
-    if not (isinstance(chunks, tuple) and all(isinstance(c, int) for c in chunks)):
+    zarr_like_chunks = isinstance(chunks, tuple) and all(isinstance(c, int) for c in chunks)
+    if not zarr_like_chunks:
         chunks = (1,) + tuple(arr.shape[1:])  # one volume per chunk, like the pipeline writes
+    if ZARR_MAJOR_VERSION < 3:
+        if zarr_like_chunks:
+            return zarr.zeros_like(arr, store=store)
+        return zarr.zeros(shape=arr.shape, chunks=chunks, dtype=arr.dtype, store=store)
     kwargs = dict(shape=arr.shape, chunks=chunks, dtype=arr.dtype, zarr_format=2)
     if store is None:
         return zarr.zeros(**kwargs)
