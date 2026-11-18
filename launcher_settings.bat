@@ -9,6 +9,9 @@ REM   SET "WBFM_DEFAULT_PROJECT=Z:\path\to\project_config.yaml"
 REM Optional, read by the recording dashboard (launch_gui.py): ';'-separated parts of
 REM folder names or paths that mark annotated reference recordings to compare against:
 REM   SET "WBFM_REFERENCE_PATTERNS=reference_set;Z:\path\to\reference_recordings"
+REM Optional, read by go.bat / wbsegmentation.bat without a folder argument: where to look for the newest recording
+REM (default Z:\neurobiology\zimmer\LeonK\raw):
+REM   SET "WBFM_RAW_ROOT=Z:\neurobiology\zimmer\LeonK\raw_incoming"
 
 SET "WBFM_ROOT=%~dp0"
 IF "%WBFM_ROOT:~-1%"=="\" SET "WBFM_ROOT=%WBFM_ROOT:~0,-1%"

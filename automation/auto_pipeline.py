@@ -38,7 +38,13 @@ from typing import Tuple, Optional, Dict, Any, List
 
 # The wbfm package (repo root) for helpers shared with the dashboard; it is also installed in the gui_only env
 sys.path.insert(1, str(Path(__file__).resolve().parents[1]))
-from wbfm.utils.projects.annotation_files import annotation_excel_file  # noqa: E402  (stdlib only, cheap)
+from wbfm.utils.projects.annotation_files import newest_annotation_file  # noqa: E402  (stdlib only, cheap)
+
+
+def read_annotation_table(path):
+    """The manual-annotation table from .xlsx or its .h5 copy (whichever is newest is the current one)"""
+    import pandas as pd
+    return pd.read_hdf(path) if str(path).endswith(".h5") else pd.read_excel(path)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -178,11 +184,25 @@ def discover_worm_folders(target_dir: Path) -> List[Path]:
     return sorted(found, key=lambda p: p.stat().st_mtime)
 
 
+def require_visible_folder(folder: Path, what: str = "Raw folder") -> Path:
+    """Stop with an explanation (not a traceback) if Windows cannot see the folder"""
+    if folder.is_dir():
+        return folder
+    hint = ""
+    if str(folder).replace("/", "\\").lower().startswith("z:\\"):
+        hint = ("\n  If it exists on the cluster, a parent folder may have been moved to /lisc/archive and replaced by a "
+                "symlink, which the Z: share cannot follow (e.g. LeonK\\raw and LeonK\\Lit_raw). Put recordings to "
+                "analyse in a real folder on scratch, e.g. Z:\\neurobiology\\zimmer\\LeonK\\raw_incoming\\<date>.")
+    logger.error(f"{what} not found or not visible from Windows: {folder}{hint}")
+    sys.exit(1)
+
+
 def find_latest_raw_folder() -> Path:
     """Find newest unanalyzed raw recording or batch folder."""
-    raw_root = scratch_win_root() / "LeonK" / "raw"
-    if not raw_root.exists():
-        raise FileNotFoundError(f"Raw root not found: {raw_root}")
+    # Where plain `go` looks for new recordings: WBFM_RAW_ROOT (e.g. set in launcher_settings.local.bat), else LeonK\raw
+    configured = os.environ.get("WBFM_RAW_ROOT", "").strip().strip('"')
+    raw_root = require_visible_folder(Path(configured) if configured else scratch_win_root() / "LeonK" / "raw",
+                                      "Raw root for auto-detection (WBFM_RAW_ROOT)")
 
     worms = discover_worm_folders(raw_root)
     if not worms:
@@ -196,6 +216,23 @@ def find_latest_raw_folder() -> Path:
 # Channel folder names: whole-token matches only, so e.g. "registered" or "filtered" never count as "red"
 _CH0_TOKEN = re.compile(r"(?:^|[^a-z0-9])(?:ch0|channel0|red)(?:[^a-z0-9]|$)")
 _CH1_TOKEN = re.compile(r"(?:^|[^a-z0-9])(?:ch1|channel1|green)(?:[^a-z0-9]|$)")
+
+
+_CHANNEL_SUFFIX = re.compile(r"[_\-\s]*(?:ch|channel)[01]\b.*$|[_\-\s]*(?:red|green)$", re.IGNORECASE)
+
+
+def _channel_base_name(name: str) -> str:
+    """'worm1-ch0' / 'worm1_red' / 'x_Ch0_old' -> 'worm1' / 'worm1' / 'x' (the part before the channel marker)"""
+    return _CHANNEL_SUFFIX.sub("", name) or name
+
+
+def _pick_channel_folder(subdirs: List[Path], exact_suffix: str, token: "re.Pattern", raw_dir: Path) -> Optional[Path]:
+    exact = [d for d in subdirs if d.name.endswith(exact_suffix)]
+    candidates = exact or [d for d in subdirs if token.search(d.name.lower())]
+    if len(candidates) > 1:
+        raise ValueError(f"Several folders in {raw_dir} look like the {exact_suffix[1:]} channel: "
+                         f"{', '.join(d.name for d in candidates)}. Move the extra one(s) out of the worm folder.")
+    return candidates[0] if candidates else None
 
 
 def sanitize_raw_folder(raw_dir: Path, allow_default_config: bool = False, dry_run: bool = False) -> Path:
@@ -221,31 +258,18 @@ def sanitize_raw_folder(raw_dir: Path, allow_default_config: bool = False, dry_r
         logger.warning(f"Directory name contains dots: {name}")
         raw_dir = rename(raw_dir, raw_dir.parent / name.replace(".", "_"))
 
-    # 2. Detect and normalize channels
-    ch0_folder, ch1_folder = None, None
+    # 2. Detect and normalize channels: a folder already ending in _Ch0/_Ch1 wins; otherwise exactly one folder may
+    # look like that channel (several candidates, e.g. 'worm4-Ch0' and 'Ch0_old', is an error rather than a guess)
     subdirs = sorted(p for p in raw_dir.iterdir() if p.is_dir())
-
-    for d in subdirs:
-        d_lower = d.name.lower()
-        if d.name.endswith("_Ch0"):
-            ch0_folder = d
-        elif d.name.endswith("_Ch1"):
-            ch1_folder = d
-    for d in subdirs:
-        d_lower = d.name.lower()
-        if ch0_folder is None and _CH0_TOKEN.search(d_lower) and d is not ch1_folder:
-            ch0_folder = d
-        elif ch1_folder is None and _CH1_TOKEN.search(d_lower) and d is not ch0_folder:
-            ch1_folder = d
+    ch0_folder = _pick_channel_folder(subdirs, "_Ch0", _CH0_TOKEN, raw_dir)
+    ch1_folder = _pick_channel_folder([d for d in subdirs if d != ch0_folder], "_Ch1", _CH1_TOKEN, raw_dir)
 
     # Normalize subfolder names to end strictly with _Ch0 and _Ch1
     if ch0_folder and not ch0_folder.name.endswith("_Ch0"):
-        base = ch0_folder.name.split("_Ch")[0].split("-Ch")[0]
-        ch0_folder = rename(ch0_folder, raw_dir / f"{base}_Ch0")
+        ch0_folder = rename(ch0_folder, raw_dir / f"{_channel_base_name(ch0_folder.name)}_Ch0")
 
     if ch1_folder and not ch1_folder.name.endswith("_Ch1"):
-        base = ch1_folder.name.split("_Ch")[0].split("-Ch")[0]
-        ch1_folder = rename(ch1_folder, raw_dir / f"{base}_Ch1")
+        ch1_folder = rename(ch1_folder, raw_dir / f"{_channel_base_name(ch1_folder.name)}_Ch1")
 
     # 3. Verify channel data integrity
     if not (ch0_folder and ch1_folder):
@@ -322,8 +346,12 @@ def project_raw_folder(project_dir: Path) -> Optional[str]:
         text = (project_dir / "project_config.yaml").read_text(errors="ignore")
     except OSError:
         return None
-    m = _PARENT_DATA_FOLDER.search(text)
-    return m.group(1).strip("'\"").rstrip("/") if m else None
+    try:
+        value = (yaml.safe_load(text) or {}).get("parent_data_folder")
+    except Exception:  # unusual tags etc.: fall back to the plain-text form the template writes
+        m = _PARENT_DATA_FOLDER.search(text)
+        value = m.group(1).strip("'\"") if m else None
+    return str(value).strip().rstrip("/") if value else None
 
 
 def find_existing_projects(raw_dir: Path, *search_parents: Optional[Path]) -> List[Path]:
@@ -340,11 +368,10 @@ def find_existing_projects(raw_dir: Path, *search_parents: Optional[Path]) -> Li
 
 
 def project_search_parents(raw_dir: Path, output_parent: Optional[Path]) -> List[Path]:
-    """Where an earlier `go` would have put this recording's project: the explicit --output-parent, else the default
-    parent and every LeonK/Analysis* folder (projects moved elsewhere afterwards are not found)"""
-    if output_parent is not None:
-        return [Path(output_parent)]
-    parents = [default_output_parent(raw_dir)]
+    """Where an earlier `go` may have put this recording's project: the --output-parent (if given), the default parent
+    and every LeonK/Analysis* folder (projects moved elsewhere afterwards are not found)"""
+    parents = [Path(output_parent)] if output_parent is not None else []
+    parents.append(default_output_parent(raw_dir))
     try:
         parents += sorted(p for p in (scratch_win_root() / "LeonK").glob("Analysis*") if p.is_dir())
     except OSError:
@@ -719,8 +746,8 @@ def check_question_mark_neurons(target_path: Optional[Path] = None, only_pending
     total_qm_count = 0
 
     for p in project_dirs:
-        # Same file the dashboard counts and opens in Excel (newest annotation file)
-        target_ann = annotation_excel_file(p)
+        # Same file the dashboard counts (the newest annotation file, .xlsx or its .h5 copy)
+        target_ann = newest_annotation_file(p)
 
         if not target_ann:
             if not only_pending:
@@ -728,7 +755,7 @@ def check_question_mark_neurons(target_path: Optional[Path] = None, only_pending
             continue
 
         try:
-            df = pd.read_excel(target_ann)
+            df = read_annotation_table(target_ann)
             id_col = "ID1" if "ID1" in df.columns else ("id1" if "id1" in df.columns else None)
             if not id_col:
                 if not only_pending:
@@ -763,12 +790,14 @@ def check_question_mark_neurons(target_path: Optional[Path] = None, only_pending
 def process_single_worm(worm_raw_dir: Path, output_parent: Optional[Path], experimenter: str, immobilized: bool = False,
                         force: bool = False, allow_default_config: bool = False) -> Optional[Dict[str, Any]]:
     """Process a single worm folder; returns None if it was skipped because it already has a project"""
-    clean_raw = sanitize_raw_folder(worm_raw_dir, allow_default_config=allow_default_config)
-    existing = find_existing_projects(clean_raw, *project_search_parents(clean_raw, output_parent))
+    # Check before sanitizing, so a skipped recording is never renamed; projects record the dot-free folder name
+    future_raw = worm_raw_dir.parent / worm_raw_dir.name.replace(".", "_")
+    existing = find_existing_projects(future_raw, *project_search_parents(future_raw, output_parent))
     if existing and not force:
-        logger.warning(f"Skipping {clean_raw.name}: already analysed in "
+        logger.warning(f"Skipping {worm_raw_dir.name}: already analysed in "
                        f"{', '.join(str(p) for p in existing)} (use --force to create another project)")
         return None
+    clean_raw = sanitize_raw_folder(worm_raw_dir, allow_default_config=allow_default_config)
     exp = clean_raw.name if experimenter == "LeonK" else experimenter  # name after the dot-free rename
     proj_dir, proj_linux = initialize_project(clean_raw, output_parent, exp, immobilized)
     job_id = submit_dual_pipeline(proj_dir, proj_linux)
@@ -818,7 +847,7 @@ def main():
     args = parser.parse_args()
 
     if args.command == "sanitize":
-        raw_target = Path(args.raw_folder)
+        raw_target = require_visible_folder(Path(args.raw_folder))
         worms = discover_worm_folders(raw_target)
         logger.info(f"Discovered {len(worms)} worm recording(s) to sanitize.")
         for w in worms:
@@ -828,7 +857,7 @@ def main():
         logger.info("================================================================")
         logger.info("             WBFM AUTOMATED PIPELINE: GO TRIGGERED              ")
         logger.info("================================================================")
-        raw_target = Path(args.raw_folder) if args.raw_folder else find_latest_raw_folder()
+        raw_target = require_visible_folder(Path(args.raw_folder)) if args.raw_folder else find_latest_raw_folder()
         worms = discover_worm_folders(raw_target)
         if not worms:
             raise FileNotFoundError(f"No valid worm acquisitions found in {raw_target}")
@@ -836,20 +865,29 @@ def main():
         out_parent = Path(args.output_parent) if args.output_parent else None
         logger.info(f"Found {len(worms)} recording(s) to process.")
 
-        dispatched, skipped = [], []
+        dispatched, skipped, failed = [], [], []
         for w in worms:
             logger.info(f"\n---> Processing: {w.name}")
-            info = process_single_worm(w, out_parent, args.experimenter, args.immobilized,
-                                       force=args.force, allow_default_config=args.default_config)
+            try:
+                info = process_single_worm(w, out_parent, args.experimenter, args.immobilized,
+                                           force=args.force, allow_default_config=args.default_config)
+            except Exception as e:  # report it and go on with the rest of the batch
+                logger.error(f"FAILED {w.name}: {e}")
+                failed.append((w.name, str(e)))
+                continue
             if info is None:
                 skipped.append(w.name)
             else:
                 dispatched.append(info)
         if skipped:
             logger.info(f"Skipped {len(skipped)} already-analysed recording(s): {', '.join(skipped)}")
+        if failed:
+            logger.error(f"{len(failed)} recording(s) were NOT submitted:")
+            for name, err in failed:
+                logger.error(f"  - {name}: {err}")
         if not dispatched:
-            logger.info("Nothing to submit. Pass a raw folder explicitly, or --force to re-analyse.")
-            return
+            logger.info("Nothing submitted." + ("" if failed else " Pass a raw folder explicitly, or --force to re-analyse."))
+            sys.exit(1 if failed else 0)
 
         logger.info("\n================================================================")
         logger.info(f"Successfully Dispatched {len(dispatched)} Recording(s) to Slurm:")
@@ -860,6 +898,8 @@ def main():
         for d in dispatched:
             logger.info(f"  go status \"{d['project_dir']}\"")
         logger.info("================================================================")
+        if failed:
+            sys.exit(1)  # some recordings of the batch were not submitted (listed above)
 
     elif args.command == "status":
         s = check_status(Path(args.project_folder))
@@ -888,12 +928,12 @@ def main():
         print("RESULT: " + ("ALL DELIVERABLES READY!" if all_ok else "SOME OUTPUTS PENDING."))
 
         # Also report ID transfer '?' status if annotations exist
-        ann_file = annotation_excel_file(proj_dir)  # same file as the dashboard and check-ids
+        ann_file = newest_annotation_file(proj_dir)  # same file as the dashboard and check-ids
         target_ann = Path(ann_file) if ann_file else None
         if target_ann:
             try:
                 import pandas as pd
-                df = pd.read_excel(target_ann)
+                df = read_annotation_table(target_ann)
                 id_col = "ID1" if "ID1" in df.columns else ("id1" if "id1" in df.columns else None)
                 if id_col:
                     total_ided = df[df[id_col].astype(str).str.strip().ne('') & ~df[id_col].astype(str).str.lower().isin(['nan', 'none'])]

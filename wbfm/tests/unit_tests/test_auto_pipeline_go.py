@@ -60,7 +60,27 @@ def test_registered_folder_is_not_mistaken_for_the_red_channel(tmp_path):
     (worm / "registered_stack").mkdir()
     ap.sanitize_raw_folder(worm)
     names = sorted(p.name for p in worm.iterdir() if p.is_dir())
-    assert names == ["registered_stack", "worm1_green_Ch1", "worm1_red_Ch0"]
+    assert names == ["registered_stack", "worm1_Ch0", "worm1_Ch1"]
+
+
+@pytest.mark.parametrize("ch0, ch1, expected", [
+    ("worm1-ch0", "worm1-ch1", ["worm1_Ch0", "worm1_Ch1"]),                     # lower-case suffix
+    ("2026-09-17_12-06_Lit_worm4-Ch0", "2026-09-17_12-06_Lit_worm4-Ch1",
+     ["2026-09-17_12-06_Lit_worm4_Ch0", "2026-09-17_12-06_Lit_worm4_Ch1"]),
+    ("w_Ch0", "w_Ch1", ["w_Ch0", "w_Ch1"]),                                      # already normalized
+])
+def test_channel_folder_normalization(tmp_path, ch0, ch1, expected):
+    worm = make_raw_worm(tmp_path, ch0=ch0, ch1=ch1)
+    ap.sanitize_raw_folder(worm)
+    assert sorted(p.name for p in worm.iterdir() if p.is_dir()) == expected
+
+
+def test_two_candidate_channel_folders_is_an_error_not_a_guess(tmp_path):
+    worm = make_raw_worm(tmp_path, ch0="worm4-Ch0", ch1="worm4-Ch1")
+    (worm / "Ch0_old").mkdir()
+    with pytest.raises(ValueError, match="Ch0_old"):
+        ap.sanitize_raw_folder(worm)
+    assert (worm / "Ch0_old").exists() and (worm / "worm4-Ch0").exists()  # nothing renamed
 
 
 def test_dry_run_changes_nothing(tmp_path):
@@ -87,9 +107,12 @@ def test_existing_projects_are_found_by_their_raw_folder(tmp_path, monkeypatch):
     mine = make_project(out, "worm1-2026-09-17", "/lisc/x/worm1")
     make_project(out, "worm10-2026-09-17", "/lisc/x/worm10")  # name prefix, different recording
     make_project(out, "other-2026-09-17", "/lisc/x/worm1/")  # same recording, other naming; trailing slash
+    quoted = out / "quoted-2026-09-17"
+    quoted.mkdir()
+    (quoted / "project_config.yaml").write_text("parent_data_folder: '/lisc/x/worm1'\n")
     (out / "no_config").mkdir()
     found = ap.find_existing_projects(raw, out)
-    assert sorted(p.name for p in found) == ["other-2026-09-17", mine.name]
+    assert sorted(p.name for p in found) == ["other-2026-09-17", "quoted-2026-09-17", mine.name]
     assert ap.find_existing_projects(raw, tmp_path / "does_not_exist") == []
 
 
@@ -121,3 +144,40 @@ def test_go_skips_analysed_recordings_unless_forced(tmp_path, monkeypatch):
     assert submitted == []
     info = ap.process_single_worm(raw, out, "LeonK", force=True)
     assert info["job_id"] == "123" and len(submitted) == 1
+
+
+def test_project_raw_folder_with_spaces(tmp_path):
+    proj = make_project(tmp_path, "p", "x")
+    (proj / "project_config.yaml").write_text("parent_data_folder: \n  /lisc/my data/w1\nred_fname: \n  /a\n")
+    assert ap.project_raw_folder(proj) == "/lisc/my data/w1"
+
+
+def test_explicit_output_parent_still_finds_projects_in_the_default_places(tmp_path, monkeypatch):
+    monkeypatch.setattr(ap, "scratch_win_root", lambda: tmp_path)
+    raw = tmp_path / "raw" / "17092026" / "worm1"
+    parents = ap.project_search_parents(raw, tmp_path / "Lit_immob")
+    assert parents[0] == tmp_path / "Lit_immob"
+    assert tmp_path / "LeonK" / "Analysis17092026" in parents
+
+
+def test_a_bad_recording_does_not_stop_the_batch(tmp_path, monkeypatch):
+    monkeypatch.setattr(ap, "win_to_linux_path", lambda p: "/lisc/x/" + Path(p).name)
+    monkeypatch.setattr(ap, "initialize_project", lambda raw, out, exp, imm: (out / f"{exp}-new", "/lisc/new"))
+    monkeypatch.setattr(ap, "submit_dual_pipeline", lambda d, l: "123")
+    batch = tmp_path / "17092026"
+    make_raw_worm(batch, name="worm1")
+    make_raw_worm(batch, name="worm2", config=False)  # missing config.yaml
+    make_raw_worm(batch, name="worm3")
+    monkeypatch.setattr(sys, "argv", ["go", "go", str(batch), "--output-parent", str(tmp_path / "out")])
+    with pytest.raises(SystemExit) as exc:
+        ap.main()
+    assert exc.value.code == 1  # failures are reported, but only after the others were submitted
+
+
+def test_skipped_recordings_are_not_renamed(tmp_path, monkeypatch):
+    monkeypatch.setattr(ap, "win_to_linux_path", lambda p: "/lisc/x/" + Path(p).name)
+    raw = make_raw_worm(tmp_path / "raw", name="worm1.5", ch0="a-ch0", ch1="a-ch1")
+    out = tmp_path / "analysis"
+    make_project(out, "worm1_5-2026", "/lisc/x/worm1_5")  # analysed earlier, after the dot-free rename
+    assert ap.process_single_worm(raw, out, "LeonK") is None
+    assert raw.exists() and (raw / "a-ch0").exists()  # untouched
