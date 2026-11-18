@@ -36,5 +36,5 @@ dependencies:
     - zarr
     - matplotlib
     - scikit-learn
-    - napari[all]
+    - napari[all]==0.8.*  # tested GUI version; newer napari drops the PyQt5 backend that wbfm/gui uses directly
     - plotly
