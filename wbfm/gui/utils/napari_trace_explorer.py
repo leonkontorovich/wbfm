@@ -1295,8 +1295,9 @@ class NapariTraceExplorer(QtWidgets.QWidget):
         self.questionMarkReviewer = reviewer
         self.viewer.window.add_dock_widget(reviewer, area='right', name="'?' Review", tabify=True)
 
-        # Keys that don't collide with the explorer's existing napari shortcuts (also work with the canvas focused)
-        for key, func in [('Ctrl-Y', reviewer.accept_current), ('Ctrl-N', reviewer.reject_current),
+        # Same keys as inside the panel, so they also work with the canvas focused. Alt+Y/N because napari's own
+        # Ctrl+Y (2D/3D toggle) and Ctrl+N (File > New Image from Clipboard) must keep working
+        for key, func in [('Alt-Y', reviewer.accept_current), ('Alt-N', reviewer.reject_current),
                           ('Ctrl-K', reviewer.skip), ('Ctrl-B', reviewer.previous), ('Ctrl-U', reviewer.undo)]:
             self.viewer.bind_key(key, lambda viewer, f=func: f(), overwrite=True)
         self.logger.info(f"{len(reviewer.queue)} uncertain ('?') IDs to review; see the '?' Review tab")

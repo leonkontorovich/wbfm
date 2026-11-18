@@ -14,7 +14,7 @@ import os
 from typing import Callable, Dict, Optional, Tuple
 
 import numpy as np
-from PyQt5.QtCore import Qt, QThread, QSettings, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, QSettings, QTimer, pyqtSignal
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QFileDialog, QShortcut, QCheckBox,
@@ -22,6 +22,9 @@ from PyQt5.QtWidgets import (
 )
 
 # Same recipe for both recordings so the shapes are comparable (matches calc_default_traces' recommended settings)
+# Accept / reject the current proposal (Qt key sequences; see _bind_shortcuts for why not Ctrl)
+ACCEPT_KEY, REJECT_KEY = "Alt+Y", "Alt+N"
+
 TRACE_OPTIONS = dict(channel_mode='dr_over_r_50', calculation_mode='integration', remove_outliers=True,
                      filter_mode='rolling_mean')
 
@@ -201,10 +204,16 @@ class QuestionMarkReviewer(QWidget):
         self.counts = dict(accepted=0, rejected=0, corrected=0)
         self._window_fraction = 0.0  # where the window sits in the longer recording (0 = start, 1 = end)
         self._own_trace_cache = (None, None, None)  # (neuron, t, y) so dragging the slider doesn't recompute
+        self._deciding = False  # True while this panel itself edits the table (it refreshes the queue on its own)
 
         self._build_ui()
         self._bind_shortcuts()
         self.refresh_queue(select=False)  # don't move the explorer's current neuron just by opening the panel
+        # IDs typed directly in the table can add or resolve '?' neurons: keep the queue in sync
+        for signal_name in ("annotation_updated", "multiple_annotations_updated"):
+            signal = getattr(editor, signal_name, None)
+            if signal is not None and hasattr(signal, "connect"):
+                signal.connect(self._on_table_edited)
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
@@ -232,10 +241,10 @@ class QuestionMarkReviewer(QWidget):
         layout.addWidget(self.info_label)
 
         row = QHBoxLayout()
-        self.accept_button = QPushButton("✓ Accept  (Ctrl+Y)")
+        self.accept_button = QPushButton("✓ Accept  (Alt+Y)")
         self.accept_button.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold;")
         self.accept_button.clicked.connect(self.accept_current)
-        self.reject_button = QPushButton("✗ Reject  (Ctrl+N)")
+        self.reject_button = QPushButton("✗ Reject  (Alt+N)")
         self.reject_button.setStyleSheet("background-color: #b71c1c; color: white; font-weight: bold;")
         self.reject_button.clicked.connect(self.reject_current)
         row.addWidget(self.accept_button)
@@ -330,8 +339,11 @@ class QuestionMarkReviewer(QWidget):
         self.canvas.setVisible(False)
 
     def _bind_shortcuts(self):
-        # Scoped to this widget; napari-canvas keys are bound separately by the trace explorer
-        for key, func in [("Ctrl+Y", self.accept_current), ("Ctrl+N", self.reject_current),
+        # Scoped to this widget; napari-canvas keys are bound separately by the trace explorer.
+        # Not Ctrl+Y / Ctrl+N: napari binds those (2D/3D toggle; "New Image from Clipboard" in the File menu, which
+        # makes Qt treat Ctrl+N as ambiguous so neither fires). napari binds no Alt keys, and its menu mnemonics are
+        # Alt+D/F/H/L/P/V/W
+        for key, func in [(ACCEPT_KEY, self.accept_current), (REJECT_KEY, self.reject_current),
                           ("Ctrl+K", self.skip), ("Ctrl+B", self.previous), ("Ctrl+U", self.undo)]:
             sc = QShortcut(QKeySequence(key), self)
             sc.setContext(Qt.WidgetWithChildrenShortcut)
@@ -350,6 +362,22 @@ class QuestionMarkReviewer(QWidget):
         else:
             self.pos = min(self.pos, max(len(self.queue) - 1, 0))
         self._show_current(select=select)
+
+    def _on_table_edited(self, *args):
+        # The editor emits before it writes the new value into its dataframe: refresh once that has happened
+        if not self._deciding:
+            QTimer.singleShot(0, self._refresh_after_table_edit)  # bound slot: dropped if the panel is gone
+
+    def _refresh_after_table_edit(self):
+        self.refresh_queue(keep=self.current, select=False)
+
+    def _decide(self, action: Callable[[], bool]) -> bool:
+        """Run an editor action that changes the table, without the edit signal also refreshing the queue"""
+        self._deciding = True
+        try:
+            return bool(action())
+        finally:
+            self._deciding = False
 
     def _advance_after_decision(self, decided: str):
         # The decided neuron has left the queue; the next one has slid into the same position
@@ -371,26 +399,30 @@ class QuestionMarkReviewer(QWidget):
     # ------------------------------------------------------------------ decisions
     def accept_current(self):
         name = self.current
-        if name and self.editor.accept_question_mark(name):
+        if name and self._decide(lambda: self.editor.accept_question_mark(name)):
             self.counts['accepted'] += 1
             self._advance_after_decision(name)
 
     def reject_current(self):
         name = self.current
-        if name and self.editor.reject_question_mark(name):
+        if name and self._decide(lambda: self.editor.reject_question_mark(name)):
             self.counts['rejected'] += 1
             self._advance_after_decision(name)
 
     def correct_current(self):
         name = self.current
         new_name = self.correct_edit.text().strip()
-        if name and new_name and self.editor.correct_question_mark(name, new_name):
+        if name and new_name and self._decide(lambda: self.editor.correct_question_mark(name, new_name)):
             self.counts['corrected'] += 1
             self.correct_edit.clear()
             self._advance_after_decision(name)
 
     def undo(self):
-        name = self.editor.undo_review_action()
+        self._deciding = True
+        try:
+            name = self.editor.undo_review_action()
+        finally:
+            self._deciding = False
         if name is not None:
             self.refresh_queue(keep=name)
 

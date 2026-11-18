@@ -167,6 +167,22 @@ class TestReviewer(unittest.TestCase):
         self.assertEqual(self.editor.df.at[0, 'ID1'], 'AVAR2')
         self.assertEqual(self.reviewer.counts['corrected'], 1)
 
+    def test_accept_and_reject_keys_do_not_collide_with_napari(self):
+        from PyQt5.QtWidgets import QShortcut
+        keys = {sc.key().toString() for sc in self.reviewer.findChildren(QShortcut)}
+        self.assertTrue({"Alt+Y", "Alt+N"} <= keys, keys)
+        self.assertFalse({"Ctrl+Y", "Ctrl+N"} & keys)  # napari: 2D/3D toggle, File > New Image from Clipboard
+
+    def test_ids_typed_in_the_table_update_the_queue(self):
+        from PyQt5.QtWidgets import QApplication
+        col = self.editor.manual_id_column_idx
+        self.editor.model.item(1, col).setText('SMDD?')   # new uncertain ID typed directly
+        self.editor.model.item(2, col).setText('RIML')    # '?' resolved directly
+        for _ in range(3):
+            QApplication.processEvents()
+        self.assertEqual(self.reviewer.queue, ['neuron_001', 'neuron_002'])
+        self.assertEqual(self.selected, [])  # syncing never moves the explorer's selection
+
     def test_selection_failure_does_not_break_review(self):
         self.reviewer.select_neuron = MagicMock(side_effect=ValueError("not in dropdown"))
         self.reviewer.skip()
