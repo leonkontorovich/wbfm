@@ -20,6 +20,8 @@ from typing import Optional, List, Dict, Tuple, Any
 # Add wbfm to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from wbfm.utils.projects.annotation_files import newest_annotation_file, annotation_excel_file
+
 from qtpy.QtWidgets import (
     QApplication, QDialog, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QCheckBox, QTableWidget, QTableWidgetItem,
@@ -745,6 +747,9 @@ def extract_metadata_for_project(project_dir: str, cache: Optional[Dict[str, Any
     except Exception:
         pass
 
+    # Reads that fail (h5 still being written, SMB hiccup, Excel lock) must not be cached as real results
+    read_errors: List[str] = []
+
     # Total Tracked Neurons & Volumes (instant check via h5py headers)
     try:
         import h5py
@@ -768,33 +773,15 @@ def extract_metadata_for_project(project_dir: str, cache: Optional[Dict[str, Any
                         meta["tracked_count"] = len(grp["axis0"])
                     if "axis1" in grp:
                         meta["num_volumes"] = len(grp["axis1"])
-    except Exception:
-        pass
+    except Exception as e:
+        read_errors.append(f"tracks/traces: {e}")
 
-    # ID'd Neurons Count & Annotated Identities
-    ann_candidates = [
-        os.path.join(project_dir, "3-tracking", "manual_annotation", "manual_annotation.xlsx"),
-        os.path.join(project_dir, "3-tracking", "manual_annotation", "manual_annotation.h5"),
-        os.path.join(project_dir, "3-tracking", "manual_annotation", "manual_annotation_iterative.xlsx"),
-        os.path.join(project_dir, "3-tracking", "manual_annotation", "manual_annotation_hungarian.xlsx"),
-        os.path.join(project_dir, "3-tracking", "id_transfer_output", "hungarian", "manual_annotation.xlsx"),
-        os.path.join(project_dir, "3-tracking", "hungarian", "manual_annotation.xlsx"),
-        os.path.join(project_dir, "manual_annotation.xlsx"),
-    ]
-
-    for cand in ann_candidates:
-        if cand.endswith(".xlsx") and os.path.exists(cand):
-            meta["excel_path"] = canonical_path(cand)
-            break
-
-    existing_cands = [cand for cand in ann_candidates if os.path.exists(cand)]
-    ann_target = None
-    if existing_cands:
-        try:
-            existing_cands.sort(key=lambda c: os.path.getmtime(c), reverse=True)
-        except Exception:
-            pass
-        ann_target = existing_cands[0]
+    # ID'd Neurons Count & Annotated Identities: counts come from the newest annotation file, and "Open in Excel"
+    # opens that same file (or its .xlsx twin when the newest is the .h5 copy); shared with `go check-ids`
+    ann_target = newest_annotation_file(project_dir)
+    excel_path = annotation_excel_file(project_dir, newest=ann_target)
+    if excel_path:
+        meta["excel_path"] = canonical_path(excel_path)
 
     if ann_target:
         try:
@@ -822,6 +809,7 @@ def extract_metadata_for_project(project_dir: str, cache: Optional[Dict[str, Any
                             pass
                     except Exception as lock_err:
                         logging.warning(f"Could not read locked Excel file {ann_target}: {lock_err}")
+                        read_errors.append(f"annotations locked: {lock_err}")
                         df = pd.DataFrame()
 
             if df is not None and not df.empty:
@@ -910,15 +898,20 @@ def extract_metadata_for_project(project_dir: str, cache: Optional[Dict[str, Any
                 meta["question_mark_names"] = sorted(list({d.get("id1") for d in qm_details if d.get("id1")}))
         except Exception as e:
             logging.debug(f"Error reading annotations for {project_dir}: {e}")
+            read_errors.append(f"annotations: {e}")
 
     meta["is_fully_processed"] = meta["has_masks"] and meta["has_tracks"] and meta["has_traces"]
     tc = meta["tracked_count"] or 0
     ac = meta["annotated_count"]
     meta["missing_annotations"] = (tc > 0 and (ac == 0 or ac < tc))
 
-    # Update cache
+    # Update cache (only complete results; a failed read is retried on the next scan instead of sticking until F5)
     if cache is not None:
-        cache[project_dir] = {"mtime": current_mtime, "fingerprint": current_fp, "metadata": meta}
+        if read_errors:
+            logging.debug(f"Not caching metadata for {project_dir}: {read_errors}")
+            cache.pop(project_dir, None)
+        else:
+            cache[project_dir] = {"mtime": current_mtime, "fingerprint": current_fp, "metadata": meta}
 
     return meta
 
@@ -2805,10 +2798,11 @@ class WBFMRecordingDashboard(QDialog):
             self.chk_labels[key].setText(f"{sym} {label}")
             self.chk_labels[key].setStyleSheet(f"color: {col}; font-weight: {'bold' if done else 'normal'}; font-size: 11pt;")
 
-        # Actions
-        self.btn_open_folder.setEnabled(bool(path_str and os.path.exists(path_str)))
-        self.btn_open_excel.setEnabled(bool(rec.get("excel_path") and os.path.exists(rec["excel_path"])))
-        self.btn_open_cfg.setEnabled(bool(rec.get("config_path") and os.path.exists(rec["config_path"])))
+        # Actions: the scan already found these paths; no file-system calls here, since every click on a row lands
+        # here and each check on a slow Z: share can freeze the window (existence is checked on click instead)
+        self.btn_open_folder.setEnabled(bool(path_str))
+        self.btn_open_excel.setEnabled(bool(rec.get("excel_path")))
+        self.btn_open_cfg.setEnabled(bool(rec.get("config_path")))
         self.btn_copy_path.setEnabled(bool(path_str))
 
     def _clear_sidebar_badges(self):
@@ -2935,10 +2929,10 @@ class WBFMRecordingDashboard(QDialog):
 
         act_folder = menu.addAction("Open in Explorer")
         act_excel = menu.addAction("Open in Excel")
-        act_excel.setEnabled(bool(rec.get("excel_path") and os.path.exists(rec["excel_path"])))
+        act_excel.setEnabled(bool(rec.get("excel_path")))
 
         act_cfg = menu.addAction("Open Config")
-        act_cfg.setEnabled(bool(rec.get("config_path") and os.path.exists(rec["config_path"])))
+        act_cfg.setEnabled(bool(rec.get("config_path")))
         menu.addSeparator()
 
         act_copy_cfg = menu.addAction("Copy Config Path")
@@ -2956,14 +2950,11 @@ class WBFMRecordingDashboard(QDialog):
         elif action == act_view_annotations:
             self._open_quick_glance_dialog(rec)
         elif action == act_folder:
-            if os.path.exists(path):
-                os.startfile(path)
+            self._open_path(path)
         elif action == act_excel:
-            if rec.get("excel_path") and os.path.exists(rec["excel_path"]):
-                os.startfile(rec["excel_path"])
+            self._open_path(rec.get("excel_path"))
         elif action == act_cfg:
-            if os.path.exists(cfg_path):
-                os.startfile(cfg_path)
+            self._open_path(cfg_path)
         elif action == act_copy_cfg:
             QApplication.clipboard().setText(cfg_path)
             self.lbl_status.setText("Config path copied to clipboard")
@@ -2971,19 +2962,24 @@ class WBFMRecordingDashboard(QDialog):
             QApplication.clipboard().setText(path)
             self.lbl_status.setText("Directory path copied to clipboard")
 
+    def _open_path(self, path: Optional[str]):
+        """Open a file or folder with its default Windows app; say so if it is gone since the scan"""
+        if path and os.path.exists(path):
+            os.startfile(path)
+        elif path:
+            self.lbl_status.setText(f"Not found (moved or deleted since the last scan; F5 rescans): {path}")
+
     def _action_open_folder(self):
-        if self.selected_record and os.path.exists(self.selected_record["path"]):
-            os.startfile(self.selected_record["path"])
+        if self.selected_record:
+            self._open_path(self.selected_record["path"])
 
     def _action_open_excel(self):
-        if self.selected_record and self.selected_record.get("excel_path"):
-            if os.path.exists(self.selected_record["excel_path"]):
-                os.startfile(self.selected_record["excel_path"])
+        if self.selected_record:
+            self._open_path(self.selected_record.get("excel_path"))
 
     def _action_open_config(self):
-        if self.selected_record and self.selected_record.get("config_path"):
-            if os.path.exists(self.selected_record["config_path"]):
-                os.startfile(self.selected_record["config_path"])
+        if self.selected_record:
+            self._open_path(self.selected_record.get("config_path"))
 
     def _action_copy_path(self):
         if self.selected_record:

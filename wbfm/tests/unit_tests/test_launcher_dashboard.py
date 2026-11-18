@@ -199,6 +199,35 @@ class TestMetadataExtraction(unittest.TestCase):
         self.assertEqual(meta["annotated_names"], ["AVAL", "AVAR"])
         self.assertEqual(meta["excel_path"], ann_path)
 
+    def test_failed_reads_are_not_cached(self):
+        import pandas as pd
+        proj_dir = os.path.join(self.test_dir, "AX10059worm3-2026-04-10")
+        ann_dir = os.path.join(proj_dir, "3-tracking", "manual_annotation")
+        os.makedirs(ann_dir, exist_ok=True)
+        ann_path = os.path.join(ann_dir, "manual_annotation.xlsx")
+        pd.DataFrame({"Neuron ID": [1], "ID1": ["AVAL"]}).to_excel(ann_path, index=False)
+        cache = {}
+        with patch("pandas.read_excel", side_effect=ValueError("half-written file")):
+            meta = extract_metadata_for_project(proj_dir, cache=cache)
+        self.assertEqual(meta["annotated_count"], 0)
+        self.assertNotIn(proj_dir, cache)  # retried on the next scan instead of showing 0 IDs until F5
+        meta = extract_metadata_for_project(proj_dir, cache=cache)
+        self.assertEqual(meta["annotated_names"], ["AVAL"])
+        self.assertIn(proj_dir, cache)
+
+    def test_open_in_excel_follows_the_newest_annotation_file(self):
+        import pandas as pd
+        proj_dir = os.path.join(self.test_dir, "AX10059worm4-2026-04-10")
+        old = os.path.join(proj_dir, "3-tracking", "manual_annotation", "manual_annotation.xlsx")
+        new = os.path.join(proj_dir, "3-tracking", "id_transfer_output", "hungarian", "manual_annotation.xlsx")
+        for path, ids in ((old, ["AVAL"]), (new, ["AVAL", "RIML"])):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            pd.DataFrame({"Neuron ID": list(range(len(ids))), "ID1": ids}).to_excel(path, index=False)
+        os.utime(old, (1_000_000_000, 1_000_000_000))
+        meta = extract_metadata_for_project(proj_dir)
+        self.assertEqual(meta["annotated_names"], ["AVAL", "RIML"])
+        self.assertEqual(meta["excel_path"], new)
+
 
 class TestScannerResilience(unittest.TestCase):
     """

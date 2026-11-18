@@ -36,6 +36,10 @@ import yaml
 from pathlib import Path
 from typing import Tuple, Optional, Dict, Any, List
 
+# The wbfm package (repo root) for helpers shared with the dashboard; it is also installed in the gui_only env
+sys.path.insert(1, str(Path(__file__).resolve().parents[1]))
+from wbfm.utils.projects.annotation_files import annotation_excel_file  # noqa: E402  (stdlib only, cheap)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(message)s",
@@ -606,13 +610,8 @@ def check_question_mark_neurons(target_path: Optional[Path] = None, only_pending
     total_qm_count = 0
 
     for p in project_dirs:
-        ann_candidates = [
-            p / "3-tracking" / "manual_annotation" / "manual_annotation.xlsx",
-            p / "3-tracking" / "id_transfer_output" / "hungarian" / "manual_annotation.xlsx",
-            p / "3-tracking" / "hungarian" / "manual_annotation.xlsx",
-            p / "manual_annotation.xlsx",
-        ]
-        target_ann = next((cand for cand in ann_candidates if cand.exists()), None)
+        # Same file the dashboard counts and opens in Excel (newest annotation file)
+        target_ann = annotation_excel_file(p)
 
         if not target_ann:
             if not only_pending:
@@ -758,13 +757,8 @@ def main():
         print("RESULT: " + ("ALL DELIVERABLES READY!" if all_ok else "SOME OUTPUTS PENDING."))
 
         # Also report ID transfer '?' status if annotations exist
-        ann_candidates = [
-            proj_dir / "3-tracking" / "manual_annotation" / "manual_annotation.xlsx",
-            proj_dir / "3-tracking" / "id_transfer_output" / "hungarian" / "manual_annotation.xlsx",
-            proj_dir / "3-tracking" / "hungarian" / "manual_annotation.xlsx",
-            proj_dir / "manual_annotation.xlsx",
-        ]
-        target_ann = next((c for c in ann_candidates if c.exists()), None)
+        ann_file = annotation_excel_file(proj_dir)  # same file as the dashboard and check-ids
+        target_ann = Path(ann_file) if ann_file else None
         if target_ann:
             try:
                 import pandas as pd
