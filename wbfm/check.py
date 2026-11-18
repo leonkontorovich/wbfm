@@ -128,7 +128,8 @@ def run_check(project_path=None):
     else:
         print("          SOME CHECKS REPORTED WARNINGS/FAILURES     ")
     print("=" * 60 + "\n")
+    return all_passed
 
 if __name__ == "__main__":
     proj = sys.argv[1] if len(sys.argv) > 1 else None
-    run_check(proj)
+    sys.exit(0 if run_check(proj) else 1)  # non-zero so scripts/launchers can use it as a preflight
