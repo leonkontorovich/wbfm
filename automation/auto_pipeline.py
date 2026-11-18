@@ -89,7 +89,9 @@ def win_to_linux_path(win_path: Path) -> str:
         return SCRATCH_LINUX_ROOT + p_str[idx + len("/neurobiology/zimmer"):]
     if p_str.startswith("/lisc/"):
         return p_str
-    return p_str
+    # e.g. C:\Users\...: the cluster cannot see it, and sending it anyway only fails later and less clearly
+    raise ValueError(f"{win_path} is not on the cluster scratch share (Z:\\ or /lisc/...); "
+                     f"copy the data to Z:\\neurobiology\\zimmer\\... first")
 
 
 def linux_to_win_path(linux_path: str) -> Path:
@@ -191,22 +193,37 @@ def find_latest_raw_folder() -> Path:
     return latest
 
 
-def sanitize_raw_folder(raw_dir: Path) -> Path:
-    """Pre-flight sanitization of raw acquisition folder."""
+# Channel folder names: whole-token matches only, so e.g. "registered" or "filtered" never count as "red"
+_CH0_TOKEN = re.compile(r"(?:^|[^a-z0-9])(?:ch0|channel0|red)(?:[^a-z0-9]|$)")
+_CH1_TOKEN = re.compile(r"(?:^|[^a-z0-9])(?:ch1|channel1|green)(?:[^a-z0-9]|$)")
+
+
+def sanitize_raw_folder(raw_dir: Path, allow_default_config: bool = False, dry_run: bool = False) -> Path:
+    """
+    Pre-flight sanitization of a raw acquisition folder: dot-free folder name, channel folders ending in _Ch0/_Ch1,
+    both channels present, and an acquisition config.yaml.
+
+    allow_default_config: if config.yaml is missing, write DEFAULT_CONFIG_YAML_CONTENT (assumed acquisition values)
+        instead of stopping. Off by default: wrong exposure/flyback values silently corrupt the physical units.
+    dry_run: only log what would be renamed or written; change nothing.
+    """
     if not raw_dir.exists():
         raise FileNotFoundError(f"Raw directory not found: {raw_dir}")
+    prefix = "[dry-run] would rename" if dry_run else "Renaming"
+
+    def rename(src: Path, dst: Path) -> Path:
+        logger.info(f"{prefix} {src.name} -> {dst.name}")
+        return src if dry_run else src.rename(dst)
 
     # 1. Remove illegal dots in directory name
     name = raw_dir.name
     if "." in name:
-        new_name = name.replace(".", "_")
-        new_path = raw_dir.parent / new_name
-        logger.warning(f"Renaming directory with dots: {name} -> {new_name}")
-        raw_dir = raw_dir.rename(new_path)
+        logger.warning(f"Directory name contains dots: {name}")
+        raw_dir = rename(raw_dir, raw_dir.parent / name.replace(".", "_"))
 
     # 2. Detect and normalize channels
     ch0_folder, ch1_folder = None, None
-    subdirs = [p for p in raw_dir.iterdir() if p.is_dir()]
+    subdirs = sorted(p for p in raw_dir.iterdir() if p.is_dir())
 
     for d in subdirs:
         d_lower = d.name.lower()
@@ -214,25 +231,21 @@ def sanitize_raw_folder(raw_dir: Path) -> Path:
             ch0_folder = d
         elif d.name.endswith("_Ch1"):
             ch1_folder = d
-        elif "ch0" in d_lower or "red" in d_lower or "channel0" in d_lower:
-            if ch0_folder is None:
-                ch0_folder = d
-        elif "ch1" in d_lower or "green" in d_lower or "channel1" in d_lower:
-            if ch1_folder is None:
-                ch1_folder = d
+    for d in subdirs:
+        d_lower = d.name.lower()
+        if ch0_folder is None and _CH0_TOKEN.search(d_lower) and d is not ch1_folder:
+            ch0_folder = d
+        elif ch1_folder is None and _CH1_TOKEN.search(d_lower) and d is not ch0_folder:
+            ch1_folder = d
 
     # Normalize subfolder names to end strictly with _Ch0 and _Ch1
     if ch0_folder and not ch0_folder.name.endswith("_Ch0"):
         base = ch0_folder.name.split("_Ch")[0].split("-Ch")[0]
-        target = raw_dir / f"{base}_Ch0"
-        logger.info(f"Normalizing Ch0 name: {ch0_folder.name} -> {target.name}")
-        ch0_folder = ch0_folder.rename(target)
+        ch0_folder = rename(ch0_folder, raw_dir / f"{base}_Ch0")
 
     if ch1_folder and not ch1_folder.name.endswith("_Ch1"):
         base = ch1_folder.name.split("_Ch")[0].split("-Ch")[0]
-        target = raw_dir / f"{base}_Ch1"
-        logger.info(f"Normalizing Ch1 name: {ch1_folder.name} -> {target.name}")
-        ch1_folder = ch1_folder.rename(target)
+        ch1_folder = rename(ch1_folder, raw_dir / f"{base}_Ch1")
 
     # 3. Verify channel data integrity
     if not (ch0_folder and ch1_folder):
@@ -250,12 +263,23 @@ def sanitize_raw_folder(raw_dir: Path) -> Path:
 
     # 4. Ensure acquisition config.yaml exists
     cfg_file = raw_dir / "config.yaml"
-    if not cfg_file.exists():
-        logger.warning(f"config.yaml missing; generating default template in {raw_dir.name}...")
-        with open(cfg_file, "w") as f:
-            f.write(DEFAULT_CONFIG_YAML_CONTENT)
-    else:
+    if cfg_file.exists():
         logger.info(f"Found existing config.yaml in {raw_dir.name} [OK]")
+    elif allow_default_config:
+        logger.warning(f"config.yaml missing in {raw_dir.name}; "
+                       f"{'[dry-run] would write' if dry_run else 'writing'} the default template "
+                       f"(ASSUMED values: exposure 20 ms, 22 z-planes, 1 flyback plane discarded)")
+        if not dry_run:
+            with open(cfg_file, "w") as f:
+                f.write(DEFAULT_CONFIG_YAML_CONTENT)
+    else:
+        msg = (f"config.yaml missing in {raw_dir}. Acquisition values (exposure_time, z_step_size, num_z_planes, "
+               f"flyback planes) cannot be guessed safely: copy the acquisition's config.yaml there, or rerun with "
+               f"--default-config to write the template with ASSUMED values (exposure 20 ms, 22 planes, 1 flyback).")
+        if dry_run:
+            logger.error(f"[dry-run] {msg}")
+        else:
+            raise FileNotFoundError(msg)
 
     return raw_dir
 
@@ -281,17 +305,63 @@ def _load_physical_unit_overrides(raw_dir: Path) -> str:
     return " ".join(overrides)
 
 
+def default_output_parent(raw_dir: Path) -> Path:
+    """Analysis<date of the raw batch folder>, or Analysis_<today> if the raw parent is not a date"""
+    parent_name = raw_dir.parent.name
+    if re.match(r"^\d{6,8}$", parent_name):
+        return scratch_win_root() / "LeonK" / f"Analysis{parent_name}"
+    return scratch_win_root() / "LeonK" / f"Analysis_{time.strftime('%Y%m%d')}"
+
+
+_PARENT_DATA_FOLDER = re.compile(r"^parent_data_folder:[ \t]*(?:\r?\n[ \t]+)?(\S+)", re.MULTILINE)
+
+
+def project_raw_folder(project_dir: Path) -> Optional[str]:
+    """The raw folder (cluster path) a project was created from: parent_data_folder in its project_config.yaml"""
+    try:
+        text = (project_dir / "project_config.yaml").read_text(errors="ignore")
+    except OSError:
+        return None
+    m = _PARENT_DATA_FOLDER.search(text)
+    return m.group(1).strip("'\"").rstrip("/") if m else None
+
+
+def find_existing_projects(raw_dir: Path, *search_parents: Optional[Path]) -> List[Path]:
+    """Projects directly inside any of search_parents that were created from raw_dir"""
+    raw_linux = win_to_linux_path(raw_dir).rstrip("/")
+    found = []
+    for parent in search_parents:
+        if parent is None or not Path(parent).is_dir():
+            continue
+        for p in sorted(Path(parent).iterdir()):
+            if p.is_dir() and project_raw_folder(p) == raw_linux:
+                found.append(p)
+    return found
+
+
+def project_search_parents(raw_dir: Path, output_parent: Optional[Path]) -> List[Path]:
+    """Where an earlier `go` would have put this recording's project: the explicit --output-parent, else the default
+    parent and every LeonK/Analysis* folder (projects moved elsewhere afterwards are not found)"""
+    if output_parent is not None:
+        return [Path(output_parent)]
+    parents = [default_output_parent(raw_dir)]
+    try:
+        parents += sorted(p for p in (scratch_win_root() / "LeonK").glob("Analysis*") if p.is_dir())
+    except OSError:
+        pass
+    unique = []
+    for p in parents:
+        if p not in unique:
+            unique.append(p)
+    return unique
+
+
 def initialize_project(raw_dir: Path, output_parent_dir: Optional[Path] = None, experimenter: str = "LeonK", immobilized: bool = False) -> Tuple[Path, str]:
     """Initialize WBFM project on LISC cluster and configure for dual tracking."""
     raw_linux = win_to_linux_path(raw_dir)
 
     if output_parent_dir is None:
-        parent_name = raw_dir.parent.name
-        if re.match(r"^\d{6,8}$", parent_name):
-            output_parent_dir = scratch_win_root() / "LeonK" / f"Analysis{parent_name}"
-        else:
-            date_tag = time.strftime("%Y%m%d")
-            output_parent_dir = scratch_win_root() / "LeonK" / f"Analysis_{date_tag}"
+        output_parent_dir = default_output_parent(raw_dir)
 
     output_parent_dir.mkdir(parents=True, exist_ok=True)
     out_linux_parent = win_to_linux_path(output_parent_dir)
@@ -499,16 +569,53 @@ fi
             break
 
     logger.info(f"Dispatched master Slurm job: ID {job_id}")
+    if job_id != "UNKNOWN":
+        # 'go status' uses this to show this project's master job (its children are found by working directory)
+        try:
+            with open(project_dir / "snakemake" / MASTER_JOBID_FILE, "a") as f:
+                f.write(job_id + "\n")
+        except OSError as e:
+            logger.warning(f"Could not record master job ID {job_id}: {e}")
     return job_id
+
+
+MASTER_JOBID_FILE = "master_jobid.txt"
+SQUEUE_FORMAT = "%i|%j|%T|%M|%R|%Z"  # parsed by select_project_jobs
+
+
+def select_project_jobs(squeue_lines: List[str], project_linux: Optional[str], master_ids) -> List[str]:
+    """
+    This project's jobs from `squeue -h -o SQUEUE_FORMAT` lines: its master job(s) by ID, and the Snakemake rule jobs
+    (named after the rule, e.g. segmentation) by their working directory inside the project
+    """
+    jobs = []
+    for line in squeue_lines:
+        parts = line.strip().split("|", 5)
+        if len(parts) < 6:
+            continue
+        job_id, name, state, elapsed, reason, workdir = (x.strip() for x in parts)
+        workdir = workdir.rstrip("/")
+        in_project = bool(project_linux) and (workdir == project_linux or workdir.startswith(project_linux + "/"))
+        if job_id in master_ids or in_project:
+            jobs.append(f"{job_id:>10}  {name:<20} {state:<10} {elapsed:>10}  {reason}")
+    return jobs
 
 
 def check_status(project_dir: Path) -> Dict[str, Any]:
     """Check live status of the running pipeline."""
     flag = project_dir / "PIPELINE_COMPLETE.flag"
-    res = run_ssh_cmd("squeue -u $USER -o '%.10i %.14j %.8T %.10M %.8m %.4C %R' | grep -E 'wbfm_|smk_|auto_|alt_barl|stardist|tracking' || true")
-    active_jobs = [line.strip() for line in res.stdout.splitlines() if line.strip()]
-
+    try:
+        project_linux = win_to_linux_path(project_dir).rstrip("/")
+    except ValueError:
+        project_linux = None
     master_logs = list(project_dir.glob("snakemake/slurm_master_*.out"))
+    master_ids = {m.group(1) for m in (re.match(r"slurm_master_(\d+)\.out$", p.name) for p in master_logs) if m}
+    ids_file = project_dir / "snakemake" / MASTER_JOBID_FILE
+    if ids_file.exists():
+        master_ids |= set(ids_file.read_text(errors="ignore").split())
+    res = run_ssh_cmd(f"squeue -u $USER -h -o '{SQUEUE_FORMAT}' || true")
+    active_jobs = select_project_jobs(res.stdout.splitlines(), project_linux, master_ids)
+
     tail = ""
     if master_logs:
         latest_log = max(master_logs, key=lambda p: p.stat().st_mtime)
@@ -535,9 +642,9 @@ def verify_outputs(project_dir: Path) -> Dict[str, bool]:
     masks = project_dir / "1-segmentation" / "masks.zarr"
     tracklets = project_dir / "2-training_data" / "all_tracklets.pickle"
     sg_tracks = project_dir / "3-tracking" / "postprocessing" / "combined_3d_tracks.h5"
-    bt_embed = project_dir / "3-tracking" / "barlow_tracker" / "embedding.zarr"
-    bt_tracks = project_dir / "3-tracking" / "barlow_tracker" / "df_barlow_tracks.h5"
-    
+    # Output of the barlow_embedding rule in pipeline.smk (the step the master job runs for ID transfer)
+    bt_embed = project_dir / "3-tracking" / "barlow_tracker" / "worm_tracker_barlow.pickle"
+
     traces_candidates = (
         list(project_dir.glob("4-traces/green_traces.h5")) or
         list(project_dir.glob("4-traces/paper_traces*.h5")) or
@@ -555,9 +662,11 @@ def verify_outputs(project_dir: Path) -> Dict[str, bool]:
         "StarDist 3D Masks (masks.zarr)": masks.exists(),
         "Tracklets (all_tracklets.pickle)": tracklets.exists() and tracklets.stat().st_size > 0,
         "SuperGlue Tracks (combined_3d_tracks.h5)": sg_tracks.exists() and sg_tracks.stat().st_size > 0,
-        "Barlow Embeddings (embedding.zarr)": bt_embed.exists(),
+        "Barlow Embedding (worm_tracker_barlow.pickle)": bt_embed.exists() and bt_embed.stat().st_size > 0,
         "Calcium Traces (green_traces.h5)": len(traces_candidates) > 0 and traces_candidates[0].stat().st_size > 0,
         "Neuron Annotations (manual_annotation.xlsx)": len(annot_candidates) > 0 and annot_candidates[0].stat().st_size > 0,
+        "Master job finished without errors (PIPELINE_COMPLETE.flag)":
+            (project_dir / "PIPELINE_COMPLETE.flag").exists() and not (project_dir / "PIPELINE_FAILED.flag").exists(),
     }
 
 
@@ -651,9 +760,15 @@ def check_question_mark_neurons(target_path: Optional[Path] = None, only_pending
     print("=" * 110)
 
 
-def process_single_worm(worm_raw_dir: Path, output_parent: Optional[Path], experimenter: str, immobilized: bool = False) -> Dict[str, Any]:
-    """Process a single sanitized worm folder."""
-    clean_raw = sanitize_raw_folder(worm_raw_dir)
+def process_single_worm(worm_raw_dir: Path, output_parent: Optional[Path], experimenter: str, immobilized: bool = False,
+                        force: bool = False, allow_default_config: bool = False) -> Optional[Dict[str, Any]]:
+    """Process a single worm folder; returns None if it was skipped because it already has a project"""
+    clean_raw = sanitize_raw_folder(worm_raw_dir, allow_default_config=allow_default_config)
+    existing = find_existing_projects(clean_raw, *project_search_parents(clean_raw, output_parent))
+    if existing and not force:
+        logger.warning(f"Skipping {clean_raw.name}: already analysed in "
+                       f"{', '.join(str(p) for p in existing)} (use --force to create another project)")
+        return None
     exp = clean_raw.name if experimenter == "LeonK" else experimenter  # name after the dot-free rename
     proj_dir, proj_linux = initialize_project(clean_raw, output_parent, exp, immobilized)
     job_id = submit_dual_pipeline(proj_dir, proj_linux)
@@ -675,10 +790,17 @@ def main():
     p_go.add_argument("--output-parent", default=None, help="Target parent directory for projects")
     p_go.add_argument("--experimenter", default="LeonK", help="Experimenter name")
     p_go.add_argument("--immobilized", action="store_true", help="Immobilized recordings: raise segment_config.yaml max_number_of_objects to 220")
+    p_go.add_argument("--force", action="store_true", help="Also process recordings that already have a project")
+    p_go.add_argument("--default-config", dest="default_config", action="store_true",
+                      help="If a raw folder has no config.yaml, write a template with ASSUMED acquisition values "
+                           "(exposure 20 ms, 22 planes, 1 flyback) instead of stopping")
 
     # sanitize
     p_san = subparsers.add_parser("sanitize", help="Check and sanitize raw data folder")
     p_san.add_argument("raw_folder", help="Raw data folder or batch directory")
+    p_san.add_argument("--dry-run", dest="dry_run", action="store_true", help="Only show what would be renamed/written")
+    p_san.add_argument("--default-config", dest="default_config", action="store_true",
+                       help="Write a template config.yaml (ASSUMED values) where it is missing")
 
     # status
     p_stat = subparsers.add_parser("status", help="Check status of running pipeline")
@@ -700,7 +822,7 @@ def main():
         worms = discover_worm_folders(raw_target)
         logger.info(f"Discovered {len(worms)} worm recording(s) to sanitize.")
         for w in worms:
-            sanitize_raw_folder(w)
+            sanitize_raw_folder(w, allow_default_config=args.default_config, dry_run=args.dry_run)
 
     elif args.command == "go":
         logger.info("================================================================")
@@ -714,11 +836,20 @@ def main():
         out_parent = Path(args.output_parent) if args.output_parent else None
         logger.info(f"Found {len(worms)} recording(s) to process.")
 
-        dispatched = []
+        dispatched, skipped = [], []
         for w in worms:
             logger.info(f"\n---> Processing: {w.name}")
-            info = process_single_worm(w, out_parent, args.experimenter, args.immobilized)
-            dispatched.append(info)
+            info = process_single_worm(w, out_parent, args.experimenter, args.immobilized,
+                                       force=args.force, allow_default_config=args.default_config)
+            if info is None:
+                skipped.append(w.name)
+            else:
+                dispatched.append(info)
+        if skipped:
+            logger.info(f"Skipped {len(skipped)} already-analysed recording(s): {', '.join(skipped)}")
+        if not dispatched:
+            logger.info("Nothing to submit. Pass a raw folder explicitly, or --force to re-analyse.")
+            return
 
         logger.info("\n================================================================")
         logger.info(f"Successfully Dispatched {len(dispatched)} Recording(s) to Slurm:")
