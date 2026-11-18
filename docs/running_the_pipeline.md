@@ -1,7 +1,7 @@
 # Running the full pipeline
 
 This file contains information for the recommended workflow is described (using .nwb files).
-If you are in the Zimmer lab and want to use lab-internal formats, see [Running the pipeline zimmer lab](docs/running_the_pipeline_zimmer_lab.md).
+If you are in the Zimmer lab and want to use lab-internal formats, see [Running the pipeline zimmer lab](running_the_pipeline_zimmer_lab.md).
 
 The following steps use the command line, and assume you have the helper scripts located in this repository (i.e., you have cloned it).
 
@@ -17,12 +17,12 @@ See [NWB file format](nwb_format.md) for the full specification, how to choose w
 
 ## Creating a project
 
-While running, the raw data file will be "unpacked" into a [folder structure](docs/data_folder_organization.md) for easier processing, which can be re-exported as .nwb at any time.
+While running, the raw data file will be "unpacked" into a [folder structure](data_folder_organization.md) for easier processing, which can be re-exported as .nwb at any time.
 Creating a project will take about 1 minute, and the scripts are:
 
 ```commandline
 cd /PATH_TO_THIS_CODE/wbfm/scripts
-python 0-create_new_project_from_nwb.py with project_dir=PATH_TO_NEW_PROJECT_LOCATION nwb_file=FULL_PATH_TO_NWB_FILE copy_nwb_file=True, unpack_nwb=True
+python 0-create_new_project_from_nwb.py with project_dir=PATH_TO_NEW_PROJECT_LOCATION nwb_file=FULL_PATH_TO_NWB_FILE copy_nwb_file=True unpack_nwb=True
 ```
 
 This will create a new project from the nwb file, copy the nwb file, and unpack any analysis steps that it can find.
@@ -39,11 +39,11 @@ In addition, if raw data is found it will be converted to zarr format for stable
 
 ## Main pipeline workflow via snakemake
 
-The analysis steps are organized via snakemake, although they can be run step-by-step, see: [detailed pipeline steps](docs/detailed_pipeline_steps.md). 
+The analysis steps are organized via snakemake, although they can be run step-by-step, see: [detailed pipeline steps](detailed_pipeline_steps.md). 
 Before anything, the parameters should be double-checked.
 Most do not matter for most people, so I will just highlight the main ones.
 
-Note that these yaml files are project-specific; in order to change project-wide or default parameters, see the [FAQ](docs/faq.md#changing-defaults-for-new-projects)
+Note that these yaml files are project-specific; in order to change project-wide or default parameters, see the [FAQ](faq.md#changing-defaults-for-new-projects)
 
 
 ### Important parameters to check
@@ -168,4 +168,4 @@ Note that it is possible to use snakemake to "know" which files need to be updat
 
 # Advanced: running steps within an incomplete project (including if it crashed)
 
-See [detailed pipeline steps](docs/detailed_pipeline_steps.md)
+See [detailed pipeline steps](detailed_pipeline_steps.md)

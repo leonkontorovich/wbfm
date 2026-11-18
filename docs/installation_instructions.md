@@ -29,7 +29,7 @@ conda activate /lisc/data/scratch/neurobiology/zimmer/.conda/envs/wbfm
 #### Creating a new conda environment
 
 Note: if you are just using the GUI, then you can use a simplified environment.
-Detailed instructions can be found in the [README](wbfm/gui/README.md) file under the gui section
+Detailed instructions can be found in the [README](../wbfm/gui/README.md) file under the gui section
 For running the full pipeline you need the environment found here:
 
 conda-environments/wbfm.yaml

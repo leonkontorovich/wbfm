@@ -112,9 +112,9 @@ def create_neuron_widget():
             # Add NaN markers
             nan_mask = pd.isna(y)
             if nan_mask.sum() > 0:
-                output.add_trace(go.Sc=x[nan_mask],
-                    y=[atter(
-                    xy[valid_mask].min() if valid_mask.any() else 0] * nan_mask.sum(),
+                output.add_trace(go.Scatter(
+                    x=x[nan_mask],
+                    y=[y[valid_mask].min() if valid_mask.any() else 0] * nan_mask.sum(),
                     mode='markers',
                     name='NaN',
                     marker=dict(color='red', size=4, symbol='x')

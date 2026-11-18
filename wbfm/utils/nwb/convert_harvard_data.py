@@ -5,8 +5,9 @@ from pynwb import NWBFile, NWBHDF5IO
 from pynwb.file import Subject
 from pynwb.behavior import Position, SpatialSeries
 from ndx_multichannel_volume import MultiChannelVolumeSeries
-from wbfm.utils.nwb.utils_nwb_export import build_optical_channel_objects, calc_simple_segmentation_mapping_table, load_per_neuron_position,
-CustomDataChunkIterator, dask_stack_volumes, segment_from_centroids_using_watershed
+from wbfm.utils.nwb.utils_nwb_export import (build_optical_channel_objects, calc_simple_segmentation_mapping_table,
+                                             load_per_neuron_position, CustomDataChunkIterator, dask_stack_volumes,
+                                             segment_from_centroids_using_watershed)
 from pynwb import TimeSeries
 from datetime import datetime
 from dateutil.tz import tzlocal
