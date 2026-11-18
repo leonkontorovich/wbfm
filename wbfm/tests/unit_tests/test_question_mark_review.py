@@ -237,6 +237,13 @@ class TestIdTransferMerge(unittest.TestCase):
         df = self.default_df()
         df.loc[2, 'Certainty'] = 1
         self.assertFalse(blank(df))
+        # Any other manual note or annotation column also counts as work that must not be overwritten
+        for col, value in (('Notes', 'tail'), ('paired_neuron', 'neuron_003'), ('Interesting_not_IDd', 'x')):
+            df = self.default_df()
+            if col not in df.columns:
+                df[col] = ''
+            df.loc[0, col] = value
+            self.assertFalse(blank(df), col)
 
 
 class TestComparisonPlot(unittest.TestCase):

@@ -2030,9 +2030,11 @@ class ProjectData:
         named = (id1 != '') & (id1 != orig)
         if 'ID2' in df.columns:
             named |= df['ID2'].astype(str).str.strip().replace('nan', '') != ''
-        # Other traces of manual work: rejected proposals (kept in Notes), certainty set, marked finished
-        if 'Notes' in df.columns:
-            named |= df['Notes'].astype(str).str.contains('rejected', case=False, regex=False)
+        # Other traces of manual work: any free-text note (rejected proposals, 'tail', 'invalid', ...) or any other
+        # annotation column filled in, certainty set, marked finished
+        for col in ('Notes', 'does_activity_match_ID', 'paired_neuron', 'Interesting_not_IDd'):
+            if col in df.columns:
+                named |= df[col].astype(str).str.strip().replace('nan', '') != ''
         if 'Certainty' in df.columns:
             named |= pd.to_numeric(df['Certainty'], errors='coerce').fillna(0) > 0
         if 'Finished?' in df.columns:
