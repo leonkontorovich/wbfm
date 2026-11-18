@@ -118,8 +118,10 @@ wbsegmentation.bat "Z:\...\Lit_raw\24092026" --output-parent "Z:\...\Lit_immob" 
 `status` lists only that project's Slurm jobs (master job and Snakemake rule jobs); `verify` also reports whether the master
 job finished without writing `PIPELINE_FAILED.flag`.
 
-Recordings that already have a project (same `parent_data_folder`, in `--output-parent` or `LeonK\Analysis*`) are skipped;
-pass `--force` to analyse them again. `wbsegmentation.bat sanitize "<raw folder>" --dry-run` shows the folder renames
+Recordings that already have a project (same `parent_data_folder`, in `--output-parent`, `LeonK\Analysis*` or any folder
+the recording dashboard scans) are skipped; pass `--force` to analyse them again. Without a folder argument, `go` takes the
+newest recording in `WBFM_RAW_ROOT` (set it in `launcher_settings.local.bat`; `LeonK\raw` itself is now an archive symlink
+that Windows cannot follow). `wbsegmentation.bat sanitize "<raw folder>" --dry-run` shows the folder renames
 the runner would make without changing anything.
 `wbsegmentation.bat` runs `wbsegmentation.py` with the `gui_only` env Python. `launcher_settings.bat` sets where that env
 lives. To override it on one machine, use a gitignored `launcher_settings.local.bat`.

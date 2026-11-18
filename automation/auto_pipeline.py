@@ -32,6 +32,7 @@ import logging
 import argparse
 import subprocess
 import functools
+import json
 import yaml
 from pathlib import Path
 from typing import Tuple, Optional, Dict, Any, List
@@ -206,7 +207,9 @@ def find_latest_raw_folder() -> Path:
 
     worms = discover_worm_folders(raw_root)
     if not worms:
-        raise FileNotFoundError(f"No valid raw acquisition folders found in {raw_root}")
+        logger.error(f"No recordings found in {raw_root} (expected worm folders with _Ch0/_Ch1 subfolders). "
+                     f"Copy new recordings there, or pass a raw folder: go \"<raw folder>\"")
+        sys.exit(1)
 
     latest = worms[-1]
     logger.info(f"Auto-detected newest recording: {latest}")
@@ -354,28 +357,51 @@ def project_raw_folder(project_dir: Path) -> Optional[str]:
     return str(value).strip().rstrip("/") if value else None
 
 
+@functools.lru_cache(maxsize=None)
+def _project_raw_folder_cached(project_dir: str) -> Optional[str]:
+    # One read per project per run: a batch checks every worm against the same folders on the Z: share
+    return project_raw_folder(Path(project_dir))
+
+
 def find_existing_projects(raw_dir: Path, *search_parents: Optional[Path]) -> List[Path]:
     """Projects directly inside any of search_parents that were created from raw_dir"""
     raw_linux = win_to_linux_path(raw_dir).rstrip("/")
     found = []
     for parent in search_parents:
-        if parent is None or not Path(parent).is_dir():
+        try:
+            if parent is None or not Path(parent).is_dir():
+                continue
+            children = sorted(Path(parent).iterdir())
+        except OSError:  # unreachable share / permissions: nothing to compare against there
             continue
-        for p in sorted(Path(parent).iterdir()):
-            if p.is_dir() and project_raw_folder(p) == raw_linux:
+        for p in children:
+            if p.is_dir() and p not in found and _project_raw_folder_cached(str(p)) == raw_linux:
                 found.append(p)
     return found
 
 
+# The recording dashboard's search roots: where analysed projects usually end up after being moved
+DASHBOARD_ROOTS_FILE = Path(__file__).resolve().parents[1] / ".custom_roots.json"
+
+
+def dashboard_search_roots() -> List[Path]:
+    try:
+        roots = json.loads(DASHBOARD_ROOTS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [Path(r) for r in roots if isinstance(r, str)] if isinstance(roots, list) else []
+
+
 def project_search_parents(raw_dir: Path, output_parent: Optional[Path]) -> List[Path]:
-    """Where an earlier `go` may have put this recording's project: the --output-parent (if given), the default parent
-    and every LeonK/Analysis* folder (projects moved elsewhere afterwards are not found)"""
+    """Where this recording's project may already be: the --output-parent (if given), the default parent, every
+    LeonK/Analysis* folder, and the recording dashboard's search roots (.custom_roots.json, e.g. Lit_immob)"""
     parents = [Path(output_parent)] if output_parent is not None else []
     parents.append(default_output_parent(raw_dir))
     try:
         parents += sorted(p for p in (scratch_win_root() / "LeonK").glob("Analysis*") if p.is_dir())
     except OSError:
         pass
+    parents += dashboard_search_roots()
     unique = []
     for p in parents:
         if p not in unique:

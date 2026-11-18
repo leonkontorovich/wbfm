@@ -181,3 +181,18 @@ def test_skipped_recordings_are_not_renamed(tmp_path, monkeypatch):
     make_project(out, "worm1_5-2026", "/lisc/x/worm1_5")  # analysed earlier, after the dot-free rename
     assert ap.process_single_worm(raw, out, "LeonK") is None
     assert raw.exists() and (raw / "a-ch0").exists()  # untouched
+
+
+def test_projects_moved_to_a_dashboard_root_are_found(tmp_path, monkeypatch):
+    import json
+    monkeypatch.setattr(ap, "win_to_linux_path", lambda p: "/lisc/x/" + Path(p).name)
+    monkeypatch.setattr(ap, "scratch_win_root", lambda: tmp_path / "share")
+    lit_immob = tmp_path / "Lit_immob"  # where analysed projects were moved afterwards
+    make_project(lit_immob, "worm1-2026-09-17", "/lisc/x/worm1")
+    roots_file = tmp_path / ".custom_roots.json"
+    roots_file.write_text(json.dumps([str(lit_immob), str(tmp_path / "gone")]))
+    monkeypatch.setattr(ap, "DASHBOARD_ROOTS_FILE", roots_file)
+    ap._project_raw_folder_cached.cache_clear()
+    raw = tmp_path / "raw" / "17092026" / "worm1"
+    found = ap.find_existing_projects(raw, *ap.project_search_parents(raw, None))
+    assert [p.name for p in found] == ["worm1-2026-09-17"]
