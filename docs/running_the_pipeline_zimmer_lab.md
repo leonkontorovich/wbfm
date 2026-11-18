@@ -104,8 +104,9 @@ Microscope output lands as flat `_Ch0`/`_Ch1` sibling folders; move each pair in
 Moves within the share are instant renames. To rename a worm, rename the worm folder and the `_Ch0`/`_Ch1` folders,
 but **never the `.tif` files**, because `NDTiff.index` refers to them by filename.
 
-`config.yaml` supplies the physical units forwarded to the project. If it is missing, a default is generated
-(22 planes, 1.5 um z-step, 20 ms exposure). Set `strain:` per condition (e.g. `ZIM2165_Lit` / `ZIM2165_Ctrl`); it feeds NWB export metadata.
+`config.yaml` supplies the physical units forwarded to the project. If it is missing, the runner stops: copy the
+acquisition's `config.yaml` into the worm folder, or pass `--default-config` to write a template with *assumed* values
+(22 planes, 1.5 um z-step, 20 ms exposure, 1 flyback plane discarded). Set `strain:` per condition (e.g. `ZIM2165_Lit` / `ZIM2165_Ctrl`); it feeds NWB export metadata.
 
 ### Launch
 
@@ -114,6 +115,12 @@ wbsegmentation.bat "Z:\...\Lit_raw\24092026" --output-parent "Z:\...\Lit_immob" 
 ```
 
 `--immobilized` sets `max_number_of_objects: 220`. Status and deliverables: `wbsegmentation.bat status|verify "<project_dir>"`.
+`status` lists only that project's Slurm jobs (master job and Snakemake rule jobs); `verify` also reports whether the master
+job finished without writing `PIPELINE_FAILED.flag`.
+
+Recordings that already have a project (same `parent_data_folder`, in `--output-parent` or `LeonK\Analysis*`) are skipped;
+pass `--force` to analyse them again. `wbsegmentation.bat sanitize "<raw folder>" --dry-run` shows the folder renames
+the runner would make without changing anything.
 `wbsegmentation.bat` runs `wbsegmentation.py` with the `gui_only` env Python. `launcher_settings.bat` sets where that env
 lives. To override it on one machine, use a gitignored `launcher_settings.local.bat`.
 
