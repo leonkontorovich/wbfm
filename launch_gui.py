@@ -39,9 +39,6 @@ DEFAULT_SEARCH_ROOTS = [
     r"Z:\LeonK\25_degrees_npr-1_vs_rde4",
     r"Z:\LeonK\20_degrees_N2",
     r"Z:\LeonK\25_degrees_N2_vs_rde4",
-    r"Z:\LeonK\Itamar_lit_immob",
-    r"Z:\LeonK\Itamar_immob_pool",
-    r"Z:\LeonK\Itamar_tet_reembed",
     r"Z:\neurobiology\zimmer\LeonK\Lit_immob",
     r"Z:\neurobiology\zimmer\LeonK\25_degrees_npr-1_vs_rde4",
 ]
@@ -320,13 +317,35 @@ def is_drive_root(p: str) -> bool:
     return os.path.splitdrive(p)[1] in ("", "\\", "/")
 
 
-REFERENCE_SOURCE = "Itamar"
+REFERENCE_SOURCE = "Reference"
+OWN_SOURCE = "Mine"
+REFERENCE_PATTERNS_ENV = "WBFM_REFERENCE_PATTERNS"
 
 
-def recording_source(rec: dict) -> str:
-    """'Itamar' for recordings copied from Itamar's analysis (the annotation reference), otherwise 'Mine'"""
+def reference_patterns() -> List[str]:
+    """
+    Lower-case substrings that mark a recording as an annotated reference recording (to compare your own
+    recordings against). Configured per machine via the WBFM_REFERENCE_PATTERNS environment variable,
+    ';'-separated, e.g. in launcher_settings.local.bat:  SET "WBFM_REFERENCE_PATTERNS=reference_set;Z:\\refs"
+    """
+    raw = os.environ.get(REFERENCE_PATTERNS_ENV, "")
+    return [p.strip().lower() for p in raw.split(";") if p.strip()]
+
+
+def recording_source(rec: dict, patterns: Optional[List[str]] = None) -> str:
+    """REFERENCE_SOURCE if the recording's path or name contains a reference pattern, otherwise OWN_SOURCE"""
+    if patterns is None:
+        patterns = reference_patterns()
     haystack = f"{rec.get('path', '')} {rec.get('name', '')}".lower()
-    return REFERENCE_SOURCE if "itamar" in haystack else "Mine"
+    return REFERENCE_SOURCE if any(p in haystack for p in patterns) else OWN_SOURCE
+
+
+def reference_patterns_hint() -> str:
+    patterns = reference_patterns()
+    if patterns:
+        return f"Reference recordings are those whose path or name contains: {', '.join(patterns)}"
+    return (f"No reference recordings configured: set {REFERENCE_PATTERNS_ENV} (';'-separated parts of "
+            f"folder names/paths) in launcher_settings.local.bat")
 
 
 def clean_strain(strain: str) -> str:
@@ -1756,10 +1775,11 @@ class WBFMRecordingDashboard(QDialog):
         self.chk_recent_only.stateChanged.connect(self._apply_filters)
         presets_row.addWidget(self.chk_recent_only)
 
-        # Mine vs. Itamar's recordings (the annotated reference to compare against)
+        # Own vs. reference recordings (annotated recordings to compare against)
         self.source_combo = QComboBox()
-        self.source_combo.addItems(["All sources", "Mine", REFERENCE_SOURCE])
-        self.source_combo.setToolTip("Show only your own recordings, or only Itamar's (the annotation reference)")
+        self.source_combo.addItems(["All sources", OWN_SOURCE, REFERENCE_SOURCE])
+        self.source_combo.setToolTip("Show only your own recordings, or only the annotated reference recordings.\n"
+                                     + reference_patterns_hint())
         self.source_combo.currentIndexChanged.connect(self._apply_filters)
         presets_row.addWidget(self.source_combo)
 
@@ -2039,12 +2059,12 @@ class WBFMRecordingDashboard(QDialog):
         self.btn_quick_glance.clicked.connect(self._on_quick_glance_clicked)
         layout.addWidget(self.btn_quick_glance)
 
-        # Jump to the reference (Itamar's) recordings that contain this recording's still-uncertain neurons
-        self.btn_find_reference = QPushButton("🔎 Find Itamar's recordings with these '?' neurons")
+        # Jump to the reference recordings that contain this recording's still-uncertain neurons
+        self.btn_find_reference = QPushButton("🔎 Find reference recordings with these '?' neurons")
         self.btn_find_reference.setEnabled(False)
         self.btn_find_reference.setToolTip(
-            "Filters the list to Itamar's recordings that have this recording's '?' neurons annotated, "
-            "best match first (same as typing n:NAME1, NAME2 in the search box)")
+            "Filters the list to reference recordings that have this recording's '?' neurons annotated, "
+            "best match first (same as typing n:NAME1, NAME2 in the search box).\n" + reference_patterns_hint())
         self.btn_find_reference.clicked.connect(self._on_find_reference_clicked)
         layout.addWidget(self.btn_find_reference)
 
@@ -2396,7 +2416,7 @@ class WBFMRecordingDashboard(QDialog):
         if rec.get("is_recent"):
             name_color = "#e5c07b"
         elif recording_source(rec) == REFERENCE_SOURCE:
-            name_color = "#61afef"  # Itamar's recordings (annotation reference)
+            name_color = "#61afef"  # reference recordings (annotated, to compare against)
         else:
             name_color = "#ffffff"
         name_item.setForeground(QColor(name_color))
@@ -2514,7 +2534,7 @@ class WBFMRecordingDashboard(QDialog):
                 self.table.setRowHidden(row, True)
                 return
 
-        # Source filter (mine / Itamar's)
+        # Source filter (own / reference recordings)
         if hasattr(self, "source_combo") and self.source_combo.currentIndex() > 0:
             if recording_source(rec) != self.source_combo.currentText():
                 self.table.setRowHidden(row, True)

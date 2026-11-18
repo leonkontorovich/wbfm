@@ -1,10 +1,11 @@
 """
-Launcher support for comparing against Itamar's recordings: source tag/filter, neuron search ("n:AVAL, RIML")
-ranked by match count, and the "find Itamar's recordings with these '?' neurons" button.
+Launcher support for comparing against reference recordings: source tag/filter, neuron search ("n:AVAL, RIML")
+ranked by match count, and the "find reference recordings with these '?' neurons" button.
 """
 import os
 import sys
 import unittest
+from unittest import mock
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 if REPO_ROOT not in sys.path:
@@ -16,8 +17,19 @@ from qtpy.QtCore import Qt
 from launch_gui import (
     WBFMRecordingDashboard, recording_source, clean_strain, parse_neuron_query, count_neuron_matches,
     is_drive_root, extract_metadata_for_project, read_exposure_time, acquisition_similarity, is_comparable,
-    describe_acquisition,
+    describe_acquisition, reference_patterns,
 )
+
+# Reference recordings are configured per machine; the tests use a fixed pattern regardless of local settings
+_env_patch = mock.patch.dict(os.environ, {"WBFM_REFERENCE_PATTERNS": "reference_set"})
+
+
+def setUpModule():
+    _env_patch.start()
+
+
+def tearDownModule():
+    _env_patch.stop()
 
 
 def make_record(name, root, annotated, qm=()):
@@ -33,10 +45,19 @@ def make_record(name, root, annotated, qm=()):
 
 class TestHelpers(unittest.TestCase):
     def test_source_and_strain(self):
-        self.assertEqual(recording_source({"path": r"Z:\neurobiology\zimmer\LeonK\Itamar_lit_immob\w1"}), "Itamar")
+        self.assertEqual(recording_source({"path": r"Z:\neurobiology\zimmer\LeonK\Reference_set\w1"}), "Reference")
         self.assertEqual(recording_source({"path": r"Z:\neurobiology\zimmer\LeonK\Lit_immob\w1"}), "Mine")
         self.assertEqual(clean_strain("2026"), "")
         self.assertEqual(clean_strain("ZIM2165"), "ZIM2165")
+
+    def test_reference_patterns_are_configurable(self):
+        rec = {"path": r"Z:\data\Other_Lab_Set\w1"}
+        with mock.patch.dict(os.environ, {"WBFM_REFERENCE_PATTERNS": " other_lab ; Z:\\refs ;"}):
+            self.assertEqual(reference_patterns(), ["other_lab", "z:\\refs"])
+            self.assertEqual(recording_source(rec), "Reference")
+        with mock.patch.dict(os.environ, {"WBFM_REFERENCE_PATTERNS": ""}):
+            self.assertEqual(reference_patterns(), [])
+            self.assertEqual(recording_source(rec), "Mine")  # nothing configured: everything is your own
 
     def test_date_first_folder_names_have_no_fake_strain(self):
         meta = extract_metadata_for_project(r"C:\does\not\exist\2026-06-30_13-02_control_tet_worm1-2026-06-30")
@@ -104,11 +125,11 @@ class TestDashboardReferenceFeatures(unittest.TestCase):
         self.d.records_by_path.clear()
         self.d.row_by_path.clear()
         mine = r"Z:\neurobiology\zimmer\LeonK\Lit_immob"
-        itamar = r"Z:\neurobiology\zimmer\LeonK\Itamar_lit_immob"
+        ref_root = r"Z:\neurobiology\zimmer\LeonK\Reference_set"
         self.mine = make_record("mine_worm1", mine, ["AVAR"], qm=["AVAL?", "RIML?", "SMDD?"])
-        self.i_two = make_record("itamar_worm1", itamar, ["AVAL", "RIML", "AVAR"])
-        self.i_one = make_record("itamar_worm2", itamar, ["AVAL", "AVAR"])
-        self.i_none = make_record("itamar_worm3", itamar, ["AVAR"])
+        self.i_two = make_record("ref_worm1", ref_root, ["AVAL", "RIML", "AVAR"])
+        self.i_one = make_record("ref_worm2", ref_root, ["AVAL", "AVAR"])
+        self.i_none = make_record("ref_worm3", ref_root, ["AVAR"])
         for rec in (self.mine, self.i_two, self.i_one, self.i_none):
             self.d._on_recording_discovered(dict(rec))
 
@@ -125,16 +146,16 @@ class TestDashboardReferenceFeatures(unittest.TestCase):
 
     def test_source_filter(self):
         self.assertEqual(len(self.visible_names()), 4)
-        self.d.source_combo.setCurrentText("Itamar")
+        self.d.source_combo.setCurrentText("Reference")
         self.assertEqual(len(self.visible_names()), 3)
         self.d.source_combo.setCurrentText("Mine")
         self.assertEqual(self.visible_names(), ["mine_worm1"])
 
-    def test_itamar_rows_are_tinted(self):
+    def test_reference_rows_are_tinted(self):
         for r in range(self.d.table.rowCount()):
             item = self.d.table.item(r, 0)
             color = item.foreground().color().name()
-            if item.text().startswith("itamar"):
+            if item.text().startswith("ref_"):
                 self.assertEqual(color, "#61afef")
             else:
                 self.assertEqual(color, "#ffffff")
@@ -142,15 +163,18 @@ class TestDashboardReferenceFeatures(unittest.TestCase):
     def test_neuron_search_ranks_by_matches_and_hides_the_rest(self):
         self.d.search_input.setText("n:AVAL, RIML")
         names = self.visible_names()
-        self.assertEqual(names[0], "itamar_worm1   ✓ 2/2")
-        self.assertEqual(names[1], "itamar_worm2   ✓ 1/2")
-        self.assertEqual(len(names), 2)  # mine has only '?' versions, itamar_worm3 has neither
+        self.assertEqual(names[0], "ref_worm1   ✓ 2/2")
+        self.assertEqual(names[1], "ref_worm2   ✓ 1/2")
+        self.assertEqual(len(names), 2)  # mine has only '?' versions, ref_worm3 has neither
 
     def test_leaving_neuron_search_restores_names(self):
         self.d.search_input.setText("n:AVAL")
         self.d.search_input.setText("")
         self.assertEqual(sorted(self.visible_names()), sorted(r["name"] for r in
                                                               (self.mine, self.i_two, self.i_one, self.i_none)))
+        # Rows that did not match the query must get their plain name sort key back too
+        keys = [self.d.table.item(r, 0).sort_key for r in range(self.d.table.rowCount())]
+        self.assertTrue(all(isinstance(k, str) for k in keys), keys)
 
     def test_find_reference_button(self):
         self.d.table.selectRow([self.d.table.item(r, 0).data(Qt.UserRole)
@@ -160,17 +184,17 @@ class TestDashboardReferenceFeatures(unittest.TestCase):
                                                          if k.endswith("mine_worm1")][0]])
         self.assertTrue(self.d.btn_find_reference.isEnabled())
         self.d.btn_find_reference.click()
-        self.assertEqual(self.d.source_combo.currentText(), "Itamar")
+        self.assertEqual(self.d.source_combo.currentText(), "Reference")
         self.assertEqual(self.d.search_input.text(), "n:AVAL, RIML, SMDD")
-        self.assertEqual(self.visible_names()[0], "itamar_worm1   ✓ 2/3")
+        self.assertEqual(self.visible_names()[0], "ref_worm1   ✓ 2/3")
 
     def test_find_button_ranks_comparable_recordings_first_and_labels_them(self):
-        itamar = r"Z:\neurobiology\zimmer\LeonK\Itamar_lit_immob"
+        ref_root = r"Z:\neurobiology\zimmer\LeonK\Reference_set"
         mine = r"Z:\neurobiology\zimmer\LeonK\Lit_immob"
         target = make_record("target", mine, ["AVAR"], qm=["AVAL?"])
         target.update(exposure_time=20.0, num_volumes=2500)
-        far = make_record("far_fast", itamar, ["AVAL"]); far.update(exposure_time=12.0, num_volumes=1041)
-        near = make_record("near_same_rate", itamar, ["AVAL"]); near.update(exposure_time=20.0, num_volumes=2251)
+        far = make_record("far_fast", ref_root, ["AVAL"]); far.update(exposure_time=12.0, num_volumes=1041)
+        near = make_record("near_same_rate", ref_root, ["AVAL"]); near.update(exposure_time=20.0, num_volumes=2251)
         for rec in (target, far, near):
             self.d._on_recording_discovered(dict(rec))
         self.d._update_inspector(self.d.records_by_path[[k for k in self.d.records_by_path if k.endswith("target")][0]])
@@ -186,7 +210,7 @@ class TestDashboardReferenceFeatures(unittest.TestCase):
         self.assertIsNone(self.d._similarity_target)
 
     def test_button_disabled_without_question_marks(self):
-        rec = self.d.records_by_path[[k for k in self.d.records_by_path if k.endswith("itamar_worm1")][0]]
+        rec = self.d.records_by_path[[k for k in self.d.records_by_path if k.endswith("ref_worm1")][0]]
         self.d._update_inspector(rec)
         self.assertFalse(self.d.btn_find_reference.isEnabled())
 

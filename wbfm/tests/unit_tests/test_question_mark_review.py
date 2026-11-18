@@ -263,7 +263,7 @@ class TestComparisonPlot(unittest.TestCase):
         dat.calculate_traces.side_effect = calc
         dat.physical_unit_conversion.volumes_per_second = fps
         dat.num_frames = n_frames
-        dat.project_dir = r"Z:\\Itamar\\worm3"
+        dat.project_dir = r"Z:\\RefLab\\worm3"
         dat.neuron_name_to_manual_id_mapping.return_value = ids or {'AVAL': 'ref_010', 'AVAR': 'ref_011'}
         return dat
 
@@ -308,7 +308,7 @@ class TestComparisonPlot(unittest.TestCase):
         r = self.make_reviewer()
         labels = " ".join(t.get_text() for t in r.figure.axes[0].get_legend().get_texts())
         self.assertIn("reference: AVAL", labels)
-        self.assertNotIn("Itamar", labels)
+        self.assertNotIn("RefLab", labels)
         self.assertNotIn("worm3", labels)
 
     def test_best_window_finds_the_matching_stretch(self):

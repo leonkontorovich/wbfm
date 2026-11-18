@@ -6,6 +6,9 @@ REM To override them on one machine, create launcher_settings.local.bat next to 
 REM file (it is gitignored) and SET any of the variables below, for example:
 REM   SET "WBFM_CONDA_ROOT=D:\Miniforge3"
 REM   SET "WBFM_DEFAULT_PROJECT=Z:\path\to\project_config.yaml"
+REM Optional, read by the recording dashboard (launch_gui.py): ';'-separated parts of
+REM folder names or paths that mark annotated reference recordings to compare against:
+REM   SET "WBFM_REFERENCE_PATTERNS=reference_set;Z:\path\to\reference_recordings"
 
 SET "WBFM_ROOT=%~dp0"
 IF "%WBFM_ROOT:~-1%"=="\" SET "WBFM_ROOT=%WBFM_ROOT:~0,-1%"
