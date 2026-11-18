@@ -2544,8 +2544,9 @@ class WBFMRecordingDashboard(QDialog):
                     self.table.setRowHidden(row, True)
                     return
             query = ""  # fully handled; don't also substring-match the "n:..." text below
-        elif item0.text() != base_name:
-            # Leaving neuron-query mode: restore the plain name and sort key
+        elif item0.text() != base_name or not isinstance(getattr(item0, "sort_key", None), str):
+            # Leaving neuron-query mode: restore the plain name and sort key (rows that did not match kept their
+            # name but got a tuple key, which would otherwise mis-sort them in a name sort)
             item0.setText(base_name)
             item0.sort_key = base_name.lower()
 
