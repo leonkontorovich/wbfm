@@ -15,8 +15,11 @@ IF "%WBFM_ROOT:~-1%"=="\" SET "WBFM_ROOT=%WBFM_ROOT:~0,-1%"
 SET "WBFM_CONDA_ROOT=%USERPROFILE%\Miniforge3"
 SET "WBFM_ENV=gui_only"
 SET "WBFM_DEFAULT_PROJECT="
+SET "WBFM_PYTHON="
+SET "WBFM_MAMBA="
 
 IF EXIST "%~dp0launcher_settings.local.bat" CALL "%~dp0launcher_settings.local.bat"
 
-SET "WBFM_PYTHON=%WBFM_CONDA_ROOT%\envs\%WBFM_ENV%\python.exe"
-SET "WBFM_MAMBA=%WBFM_CONDA_ROOT%\condabin\mamba.bat"
+REM Derived paths, unless launcher_settings.local.bat set them directly
+IF NOT DEFINED WBFM_PYTHON SET "WBFM_PYTHON=%WBFM_CONDA_ROOT%\envs\%WBFM_ENV%\python.exe"
+IF NOT DEFINED WBFM_MAMBA SET "WBFM_MAMBA=%WBFM_CONDA_ROOT%\condabin\mamba.bat"
