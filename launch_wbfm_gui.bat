@@ -1,11 +1,14 @@
 @echo off
 SETLOCAL
-REM Launcher for WBFM GUI with memory
+TITLE WBFM Dashboard
+REM Launcher for the WBFM recording dashboard / trace explorer (launch_gui.py).
+REM Desktop shortcut: may start this window minimized; failures pop up a message box.
 CALL "%~dp0launcher_settings.bat"
 
 IF NOT EXIST "%WBFM_PYTHON%" (
     echo ERROR: Python not found at "%WBFM_PYTHON%"
     echo Set WBFM_CONDA_ROOT / WBFM_ENV in launcher_settings.local.bat
+    CALL :show_error "Python not found at %WBFM_PYTHON%. Set WBFM_CONDA_ROOT / WBFM_ENV in launcher_settings.local.bat"
     pause
     EXIT /B 1
 )
@@ -14,11 +17,19 @@ REM Skip "mamba activate" (several seconds of startup): put the env's DLL/script
 SET "WBFM_ENV_DIR=%WBFM_CONDA_ROOT%\envs\%WBFM_ENV%"
 SET "PATH=%WBFM_ENV_DIR%;%WBFM_ENV_DIR%\Library\mingw-w64\bin;%WBFM_ENV_DIR%\Library\usr\bin;%WBFM_ENV_DIR%\Library\bin;%WBFM_ENV_DIR%\Scripts;%PATH%"
 
-echo Launching WBFM Trace Explorer...
+echo Launching WBFM Dashboard...
 "%WBFM_PYTHON%" -X utf8 "%WBFM_ROOT%\launch_gui.py" %*
+SET "WBFM_RC=%ERRORLEVEL%"
 
-IF %ERRORLEVEL% NEQ 0 (
+IF NOT "%WBFM_RC%"=="0" (
     echo.
-    echo ERROR: The GUI exited with an error code %ERRORLEVEL%. See output above.
+    echo ERROR: The GUI exited with error code %WBFM_RC%. See output above.
+    CALL :show_error "The WBFM Dashboard exited with error code %WBFM_RC%. Details are in the WBFM Dashboard console window on the taskbar."
     pause
 )
+EXIT /B %WBFM_RC%
+
+:show_error
+REM Message box, so an error is not missed when this console is minimized
+powershell.exe -NoProfile -WindowStyle Hidden -Command "Add-Type -AssemblyName PresentationFramework; [void][System.Windows.MessageBox]::Show('%~1', 'WBFM Dashboard', 'OK', 'Error')" >NUL 2>&1
+EXIT /B 0

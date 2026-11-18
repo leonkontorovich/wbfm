@@ -33,6 +33,21 @@ from qtpy.QtGui import QColor, QFont, QIcon, QBrush, QPixmap, QPainter
 HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".recent_projects.json")
 CUSTOM_ROOTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".custom_roots.json")
 CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".dashboard_cache.json")
+APP_ICON_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wbfm", "gui", "icons", "wbfm_dashboard.ico")
+
+
+def apply_app_icon(app) -> None:
+    """Window and taskbar icon for the dashboard; purely cosmetic, so never fails"""
+    if not os.path.exists(APP_ICON_FILE):
+        return
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            # Own taskbar entry, so Windows shows this icon instead of python.exe's
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ZimmerLab.WBFM.Dashboard")
+        app.setWindowIcon(QIcon(APP_ICON_FILE))
+    except Exception as e:
+        logging.debug(f"Could not set the application icon: {e}")
 
 DEFAULT_SEARCH_ROOTS = [
     r"Z:\LeonK\Lit_immob",
@@ -3136,6 +3151,7 @@ def launch_gui_prompt(return_options: bool = False, standalone: bool = False) ->
         if hasattr(Qt, "AA_UseHighDpiPixmaps"):
             QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
         app = QApplication(sys.argv)
+    apply_app_icon(app)
 
     dialog = WBFMRecordingDashboard(standalone=standalone)
     result = dialog.exec_()
