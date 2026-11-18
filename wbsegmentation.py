@@ -17,6 +17,6 @@ from auto_pipeline import main
 if __name__ == "__main__":
     if len(sys.argv) == 1:
         sys.argv.append("go")
-    elif sys.argv[1] not in ["go", "sanitize", "status", "verify", "-h", "--help"]:
+    elif sys.argv[1] not in ["go", "sanitize", "status", "verify", "check-ids", "-h", "--help"]:
         sys.argv.insert(1, "go")
     main()

@@ -312,7 +312,8 @@ def initialize_project(raw_dir: Path, output_parent_dir: Optional[Path] = None, 
 
     matching = [
         p for p in output_parent_dir.iterdir()
-        if p.is_dir() and p.name.startswith(experimenter) and (p / "project_config.yaml").exists()
+        # Projects are named "<experimenter>-<raw name>"; the "-" keeps worm1 from matching worm10-...
+        if p.is_dir() and p.name.startswith(experimenter + "-") and (p / "project_config.yaml").exists()
     ]
     if not matching:
         matching = [
@@ -463,6 +464,7 @@ if [ $STATUS_MAIN -ne 0 ]; then
     echo "[WARNING] Main pipeline exited with code $STATUS_MAIN. Unlocking and retrying once..."
     snakemake -s pipeline.smk --unlock || true
     bash RUNME.sh
+    STATUS_MAIN=$?
 fi
 
 echo "[3/3] Running Barlow Embedding (GPU Feature Extraction for ID Transfer)..."
@@ -473,8 +475,15 @@ if [ $STATUS_BARLOW -ne 0 ]; then
     echo "[WARNING] Barlow embedding exited with code $STATUS_BARLOW"
 fi
 
-echo "PIPELINE_COMPLETE" > "{project_linux}/PIPELINE_COMPLETE.flag"
-echo "=== WBFM Pipeline Master Completed at $(date) ==="
+rm -f "{project_linux}/PIPELINE_FAILED.flag"
+if [ $STATUS_MAIN -eq 0 ] && [ $STATUS_BARLOW -eq 0 ]; then
+    echo "PIPELINE_COMPLETE" > "{project_linux}/PIPELINE_COMPLETE.flag"
+    echo "=== WBFM Pipeline Master Completed at $(date) ==="
+else
+    echo "main=$STATUS_MAIN barlow=$STATUS_BARLOW" > "{project_linux}/PIPELINE_FAILED.flag"
+    echo "=== WBFM Pipeline Master FAILED at $(date) (main=$STATUS_MAIN, barlow=$STATUS_BARLOW) ==="
+    exit 1
+fi
 """
 
     remote_submission = f"cat << 'EOF' | sbatch\n{master_script}EOF"
@@ -509,6 +518,8 @@ def check_status(project_dir: Path) -> Dict[str, Any]:
     return {
         "project": project_dir.name,
         "is_complete": flag.exists(),
+        "failed": (project_dir / "PIPELINE_FAILED.flag").read_text(errors="ignore").strip()
+        if (project_dir / "PIPELINE_FAILED.flag").exists() else "",
         "active_jobs": active_jobs,
         "latest_log_tail": tail
     }
@@ -644,7 +655,7 @@ def check_question_mark_neurons(target_path: Optional[Path] = None, only_pending
 def process_single_worm(worm_raw_dir: Path, output_parent: Optional[Path], experimenter: str, immobilized: bool = False) -> Dict[str, Any]:
     """Process a single sanitized worm folder."""
     clean_raw = sanitize_raw_folder(worm_raw_dir)
-    exp = worm_raw_dir.name if experimenter == "LeonK" else experimenter
+    exp = clean_raw.name if experimenter == "LeonK" else experimenter  # name after the dot-free rename
     proj_dir, proj_linux = initialize_project(clean_raw, output_parent, exp, immobilized)
     job_id = submit_dual_pipeline(proj_dir, proj_linux)
     return {
@@ -724,6 +735,8 @@ def main():
         s = check_status(Path(args.project_folder))
         print(f"\nProject:     {s['project']}")
         print(f"Completed:   {s['is_complete']}")
+        if s.get("failed"):
+            print(f"FAILED:      {s['failed']} (see snakemake/slurm_master_*.out)")
         print(f"Active Jobs: {len(s['active_jobs'])}")
         for j in s['active_jobs']:
             print(f"  {j}")

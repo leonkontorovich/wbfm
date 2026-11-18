@@ -102,6 +102,7 @@ def run_check(project_path=None):
         p_path = Path(project_path)
         if not p_path.exists():
             print(f"    ERROR: Path {p_path} does not exist.")
+            all_passed = False
         else:
             try:
                 from wbfm.utils.projects.finished_project_data import ProjectData
@@ -110,13 +111,16 @@ def run_check(project_path=None):
                     str(p_path),
                     to_load_tracklets=False,
                     to_load_interactivity=False,
-                    to_load_traces=False
                 )
                 print(f"    Volumes: {p_data.num_frames}")
-                print(f"    Finished neurons: {len(p_data.finished_neuron_list) if hasattr(p_data, 'finished_neuron_list') else 'N/A'}")
+                try:
+                    print(f"    Finished neurons: {len(p_data.finished_neuron_names())}")
+                except Exception as e:
+                    print(f"    Finished neurons: N/A ({e})")
                 print("    Project data check: OK")
             except Exception as e:
                 print(f"    Project data check: FAILED ({e})")
+                all_passed = False
 
     print("\n" + "=" * 60)
     if all_passed:
