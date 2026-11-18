@@ -84,7 +84,8 @@ def resolve_mounted_path_in_current_os(raw_path: str, allow_only_parent_to_exist
         try:
             if machine_is_linux:
                 if path_is_windows_style:
-                    path = raw_path.replace(win_drive, linux_drive)
+                    # Z:\a\b -> /lisc/.../a/b (backslashes would otherwise stay part of the file name on Linux)
+                    path = raw_path.replace(win_drive, linux_drive).replace("\\", "/")
                     path = str(Path(path).resolve())
                     if verbose >= 2:
                         print(f"Converted windows style path {raw_path} to linux style {path}")
