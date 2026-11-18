@@ -1,5 +1,19 @@
 # Whole Brain Freely Moving Tracking and Trace extraction
 
+> **About this fork** ([leonkontorovich/wbfm](https://github.com/leonkontorovich/wbfm), branch `main`): the
+> [Zimmer-lab pipeline](https://github.com/Zimmer-lab/wbfm) plus additions for running it from a Windows workstation.
+> Anyone is welcome to use them; the lab's own repository is unchanged. Main additions:
+> - **Recording dashboard** (`launch_gui.py`, `launch_wbfm_gui.bat`): finds your projects, shows pipeline status and ID
+>   counts, and opens the trace explorer.
+> - **ID-transfer review in the trace explorer**: a '?' Review panel to accept (Alt+Y), reject (Alt+N) or correct
+>   uncertain neuron IDs, compared against an annotated reference recording.
+> - **One-command cluster runs** (`go.bat` / `wbsegmentation.bat`): checks raw folders, creates projects, submits the
+>   Slurm pipeline, skips recordings that were already analysed, and reports `status` / `verify` / `check-ids`.
+>   See [Running the pipeline (Zimmer lab)](docs/running_the_pipeline_zimmer_lab.md), section "Automated runner".
+> - **Fixes**: zarr 2/3 compatibility, path translation between Windows and the cluster, Windows launchers, docs.
+>
+> Machine-specific settings go in a gitignored `launcher_settings.local.bat` (see `launcher_settings.bat`).
+
 Contains code for the pipeline, GUI, and analysis code for the paper:
 [An intrinsic neuronal manifold underlies brain-wide hierarchical organization of behavior in C. elegans](https://www.biorxiv.org/content/10.1101/2025.03.09.642241v1)
 
