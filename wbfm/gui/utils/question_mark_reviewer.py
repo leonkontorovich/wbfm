@@ -14,7 +14,7 @@ import os
 from typing import Callable, Dict, Optional, Tuple
 
 import numpy as np
-from PyQt5.QtCore import Qt, QThread, QSettings, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, QSettings, QTimer, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QFileDialog, QShortcut, QCheckBox,
@@ -366,8 +366,9 @@ class QuestionMarkReviewer(QWidget):
     def _on_table_edited(self, *args):
         # The editor emits before it writes the new value into its dataframe: refresh once that has happened
         if not self._deciding:
-            QTimer.singleShot(0, self._refresh_after_table_edit)  # bound slot: dropped if the panel is gone
+            QTimer.singleShot(0, self._refresh_after_table_edit)
 
+    @pyqtSlot()  # a real Qt slot: Qt drops the queued call if the panel's widget is destroyed in the meantime
     def _refresh_after_table_edit(self):
         self.refresh_queue(keep=self.current, select=False)
 
