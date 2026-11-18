@@ -14,7 +14,7 @@ from skimage.segmentation import find_boundaries
 from tqdm.auto import tqdm
 import skimage
 from scipy.optimize import curve_fit
-from wbfm.utils.external.utils_zarr import zarr_reader_folder_or_zipstore
+from wbfm.utils.external.utils_zarr import zarr_reader_folder_or_zipstore, zeros_like_compat
 from wbfm.utils.general.utils_networkx import calc_bipartite_from_candidates
 from wbfm.utils.projects.project_config_classes import ModularProjectConfig
 from wbfm.utils.general.utils_filenames import get_sequential_filename
@@ -1115,7 +1115,7 @@ def zero_out_borders_using_config(project_config: ModularProjectConfig):
     do_full_erosion = segment_cfg.config['segmentation_params'].get('full_erosion', False)
 
     new_seg_fname = get_sequential_filename(old_seg_fname)
-    new_masks = zarr.zeros_like(old_masks, store=new_seg_fname)
+    new_masks = zeros_like_compat(old_masks, store=new_seg_fname)
     # new_masks = zarr.open(new_seg_fname, mode='a',
     #                       shape=old_masks.shape, chunks=old_masks.chunks, dtype=np.uint16,
     #                       fill_value=0,

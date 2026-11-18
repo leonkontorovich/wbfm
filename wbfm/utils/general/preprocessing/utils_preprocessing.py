@@ -21,7 +21,7 @@ from tifffile import tifffile
 from tqdm.auto import tqdm
 from types import SimpleNamespace
 
-from wbfm.utils.external.utils_zarr import zarr_reader_folder_or_zipstore
+from wbfm.utils.external.utils_zarr import zarr_reader_folder_or_zipstore, zeros_like_compat, ZARR_MAJOR_VERSION
 from wbfm.utils.external.custom_errors import MustBeFiniteError, TiffFormatError
 from wbfm.utils.general.preprocessing.deconvolution import ImageScaler, CustomPSF, sharpen_volume_using_dog, \
     sharpen_volume_using_bilateral
@@ -47,8 +47,8 @@ def background_subtract_single_channel(raw_fname, background_fname, num_frames, 
     # Don't try to modify the data as read; it is read-only
     fname_subtracted = add_name_suffix(raw_fname, '_background_subtracted')
     logging.info(f"Creating data copy at {fname_subtracted}")
-    store = zarr.DirectoryStore(fname_subtracted)
-    background_subtracted = zarr.zeros_like(raw_data, store=store)
+    store = zarr.DirectoryStore(fname_subtracted) if ZARR_MAJOR_VERSION < 3 else fname_subtracted
+    background_subtracted = zeros_like_compat(raw_data, store=store)
     # Loop so that not all is loaded in memory... should I use dask?
     for i, volume in enumerate(tqdm(raw_data)):
         background_subtracted[i, ...] = np.array(np.maximum(volume - background_video_mean, 0), dtype=volume.dtype)
