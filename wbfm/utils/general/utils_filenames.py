@@ -64,13 +64,15 @@ def resolve_mounted_path_in_current_os(raw_path: str, allow_only_parent_to_exist
     # Swap mounted drive locations
     # Last updated: Oct 2025
     mounted_drive_pairs = [
-        ('Y:', "/groups/zimmer"),
-        ('Z:', "/lisc/data/scratch/neurobiology/zimmer"),
-        ('Z:', "/lisc/data/scratch/neurobiology"),
+        # Order matters when only the parent has to exist: try the shortest linux root first, so on Windows the
+        # most specific drive path is tried first (e.g. Z:\neurobiology\zimmer\NEW before Z:\NEW, whose parent
+        # Z:\ always exists). Existence checks still fall through to the right pair if the drive is mapped deeper.
         ('Z:', "/lisc/data/scratch"),
-        ('S:', "/lisc/data/scratch/neurobiology/zimmer"),
-        ('S:', "/lisc/data/scratch/neurobiology"),
+        ('Z:', "/lisc/data/scratch/neurobiology"),
+        ('Z:', "/lisc/data/scratch/neurobiology/zimmer"),
         ('S:', "/lisc/data/scratch"),
+        ('S:', "/lisc/data/scratch/neurobiology"),
+        ('S:', "/lisc/data/scratch/neurobiology/zimmer"),
         (r'//samba.lisc.univie.ac.at/scratch', "/lisc/data/scratch"),  # Mac
         ('/lisc/scratch', "/lisc/data/scratch")
     ]
@@ -103,8 +105,9 @@ def resolve_mounted_path_in_current_os(raw_path: str, allow_only_parent_to_exist
                         print(f"Converted linux style path {raw_path} to windows style {path}")
                 elif path_is_windows_style:
                     norm_raw = raw_path.replace("/", "\\")
-                    if norm_raw.lower().startswith("z:\\neurobiology\\zimmer"):
-                        path = "Z:" + norm_raw[len("z:\\neurobiology\\zimmer"):]
+                    zimmer_prefix = "z:\\neurobiology\\zimmer"
+                    if norm_raw.lower() == zimmer_prefix or norm_raw.lower().startswith(zimmer_prefix + "\\"):
+                        path = "Z:\\" + norm_raw[len(zimmer_prefix):].lstrip("\\")
                     elif norm_raw.lower().startswith("z:\\"):
                         path = "Z:\\neurobiology\\zimmer" + norm_raw[2:]
                     if path:
